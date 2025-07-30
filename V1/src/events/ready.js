@@ -1,0 +1,13 @@
+const logger = require('../utils/logger');
+
+module.exports = {
+    name: 'ready',
+    once: true,
+    execute(client) {
+        logger.info(`Bot logged in as ${client.user.tag}`);
+        client.user.setActivity('les pactes ARAM', { type: 'WATCHING' });
+        
+        // Initialize pending pactes collection
+        client.pendingPactes = new Map();
+    }
+};
