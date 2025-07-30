@@ -126,3 +126,67 @@ module.exports = {
     startPolling,
     checkPacteProgress
 };
+
+// Ajouter ces fonctions manquantes :
+
+async function checkIfInSameARAM(participants) {
+    // Check if all participants are in the same ARAM game
+    let gameId = null;
+    
+    for (const participant of participants) {
+        const currentGame = await getCurrentGame(participant.riot_puuid);
+        
+        if (!currentGame) return null;
+        if (currentGame.gameQueueConfigId !== 450) return null; // Not ARAM
+        
+        if (gameId === null) {
+            gameId = currentGame.gameId;
+        } else if (gameId !== currentGame.gameId) {
+            return null; // Not in same game
+        }
+    }
+    
+    return gameId;
+}
+
+async function getLastGameResult(participants) {
+    // Get the most recent game for any participant
+    const matchIds = await getMatchHistory(participants[0].riot_puuid, 1);
+    if (matchIds.length === 0) return null;
+    
+    const matchDetails = await getMatchDetails(matchIds[0]);
+    
+    // Check if all participants were in this game
+    const participantPuuids = participants.map(p => p.riot_puuid);
+    const gameParticipants = matchDetails.info.participants;
+    
+    let allInGame = true;
+    let won = false;
+    
+    for (const puuid of participantPuuids) {
+        const participant = gameParticipants.find(p => p.puuid === puuid);
+        if (!participant) {
+            allInGame = false;
+            break;
+        }
+        won = participant.win;
+    }
+    
+    if (!allInGame) return null;
+    
+    return { win: won, matchId: matchIds[0] };
+}
+
+async function completePacte(pacte, success, points) {
+    const { completePacte: completeInDb } = require('./userManager');
+    await completeInDb(pacte.id, success, points);
+}
+
+async function getPacteParticipants(pacteId) {
+    const { getPacteParticipants: getFromDb } = require('./userManager');
+    return await getFromDb(pacteId);
+}
+
+// Importer les fonctions nécessaires en haut du fichier
+const { getCurrentGame, getMatchHistory, getMatchDetails } = require('./riotApi');
+const { calculateMalus } = require('./pointsCalculator');

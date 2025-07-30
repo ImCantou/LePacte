@@ -40,13 +40,20 @@ module.exports = {
 
 async function handleCreatePacte(interaction) {
     const objective = interaction.options.getInteger('objectif');
-    const mentions = interaction.message.mentions.users;
+    const playersString = interaction.options.getString('joueurs');
+    
+    // Parse mentions from string
+    const mentionRegex = /<@!?(\d+)>/g;
+    const mentions = [...playersString.matchAll(mentionRegex)];
     
     // Verify all mentioned users are registered
     const participants = [interaction.user.id];
-    for (const [userId, user] of mentions) {
+    
+    for (const match of mentions) {
+        const userId = match[1];
         const dbUser = await getUserByDiscordId(userId);
         if (!dbUser) {
+            const user = await interaction.client.users.fetch(userId);
             return interaction.reply({
                 content: `❌ ${user.username} n'est pas enregistré. Utilisez /register d'abord.`,
                 ephemeral: true
@@ -55,8 +62,8 @@ async function handleCreatePacte(interaction) {
         participants.push(userId);
     }
 
-    // Create pacte
-    const pacteId = await createPacte(objective, participants);
+    // Create pacte - il manque le channelId
+    const pacteId = await createPacte(objective, participants, interaction.channelId);
     
     // Display pacte rules
     const rulesEmbed = {
@@ -86,6 +93,7 @@ async function handleCreatePacte(interaction) {
         channelId: interaction.channelId,
         participants: participants,
         signatures: [],
+        objective: objective, // AJOUTER
         expires: Date.now() + 300000 // 5 minutes
     });
 }
