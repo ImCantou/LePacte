@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { Client, GatewayIntentBits, Collection } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -15,6 +16,7 @@ const client = new Client({
 });
 
 client.commands = new Collection();
+client.pendingPactes = new Map();
 
 // Load commands
 const commandsPath = path.join(__dirname, 'commands');
@@ -50,5 +52,12 @@ async function init() {
         process.exit(1);
     }
 }
+
+// Handle shutdown gracefully
+process.on('SIGINT', async () => {
+    logger.info('Shutting down bot...');
+    await client.destroy();
+    process.exit(0);
+});
 
 init();
