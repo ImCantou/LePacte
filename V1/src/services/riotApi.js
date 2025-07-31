@@ -38,7 +38,7 @@ async function getSummonerByName(summonerName, region = 'euw1') {
         // First, get account by riot ID (using europe routing)
         const accountUrl = `https://europe.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}`;
         
-        logger.info(`Calling Riot Account API: ${accountUrl}`);
+        logger.debug(`Calling Riot Account API: ${accountUrl}`);
         
         const accountResponse = await axios.get(accountUrl, {
             headers: { 'X-Riot-Token': API_KEY }
@@ -47,7 +47,7 @@ async function getSummonerByName(summonerName, region = 'euw1') {
         // Then get summoner data using puuid
         const summonerUrl = `https://${region}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${accountResponse.data.puuid}`;
         
-        logger.info(`Calling Riot Summoner API: ${summonerUrl}`);
+        logger.debug(`Calling Riot Summoner API: ${summonerUrl}`);
         
         const summonerResponse = await axios.get(summonerUrl, {
             headers: { 'X-Riot-Token': API_KEY }

@@ -5,6 +5,7 @@ const { TAUNTS } = require('../utils/constants');
 const logger = require('../utils/logger');
 
 let pollingInterval;
+let pollingCounter = 0; // Compteur pour logs conditionnels
 
 async function startPolling(client) {
     logger.info('Starting pacte polling...');
@@ -17,6 +18,11 @@ async function startPolling(client) {
 async function checkAllPactes(client) {
     try {
         const activePactes = await getActivePactes();
+        
+        pollingCounter++;
+        
+        // Utiliser la nouvelle méthode de logging pour éviter le spam
+        logger.logPolling(`Polling check #${pollingCounter}: ${activePactes.length} active pactes`);
         
         for (const pacte of activePactes) {
             await checkPacteProgress(pacte, client);
