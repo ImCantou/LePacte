@@ -76,12 +76,17 @@ async function signPacte(pacteId, discordId) {
     );
     
     // Check if all signed
-    const unsigned = await db.get(
-        'SELECT COUNT(*) as count FROM participants WHERE pacte_id = ? AND signed_at IS NULL',
+    const allParticipants = await db.get(
+        'SELECT COUNT(*) as total FROM participants WHERE pacte_id = ?',
         pacteId
     );
     
-    if (unsigned.count === 0) {
+    const signedParticipants = await db.get(
+        'SELECT COUNT(*) as signed FROM participants WHERE pacte_id = ? AND signed_at IS NOT NULL',
+        pacteId
+    );
+    
+    if (signedParticipants.signed === allParticipants.total) {
         // All signed, activate pacte
         await db.run(
             'UPDATE pactes SET status = "active", started_at = CURRENT_TIMESTAMP WHERE id = ?',
