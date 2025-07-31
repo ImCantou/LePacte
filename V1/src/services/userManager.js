@@ -161,7 +161,8 @@ async function signPacte(pacteId, discordId) {
             allSigned,
             signedCount: counts.signed,
             totalParticipants: counts.total,
-            participantNames: participantNames.map(p => p.summoner_name).join(', ')
+            participantNames: participantNames.map(p => p.summoner_name).join(', '),
+            isNewParticipant: participant.signed_at === null && counts.signed > 1 // Nouveau si pas déjà signé et pas le premier
         };
         
     } catch (error) {
@@ -454,6 +455,66 @@ async function cleanupExpiredPactes() {
     return result.changes;
 }
 
+async function kickParticipant(pacteId, discordId, malus, reason) {
+    const db = getDb();
+    
+    await db.run('BEGIN TRANSACTION');
+    
+    try {
+        // Marquer comme kicked
+        await db.run(
+            `UPDATE participants 
+             SET kicked_at = CURRENT_TIMESTAMP, 
+                 points_gained = ?, 
+                 kick_reason = ? 
+             WHERE pacte_id = ? AND discord_id = ?`,
+            [-malus, reason, pacteId, discordId]
+        );
+        
+        // Appliquer le malus
+        await updateUserPoints(discordId, -malus);
+        
+        // Vérifier s'il reste des participants
+        const remaining = await db.get(
+            `SELECT COUNT(*) as count 
+             FROM participants 
+             WHERE pacte_id = ? 
+               AND signed_at IS NOT NULL 
+               AND left_at IS NULL 
+               AND kicked_at IS NULL`,
+            pacteId
+        );
+        
+        if (remaining.count === 0) {
+            await db.run(
+                'UPDATE pactes SET status = "failed", completed_at = CURRENT_TIMESTAMP WHERE id = ?',
+                pacteId
+            );
+        }
+        
+        await db.run('COMMIT');
+        
+        logger.warn(`User ${discordId} kicked from pacte #${pacteId}. Reason: ${reason}. Malus: -${malus}`);
+        
+    } catch (error) {
+        await db.run('ROLLBACK');
+        throw error;
+    }
+}
+
+async function isParticipant(pacteId, discordId) {
+    const db = getDb();
+    const result = await db.get(
+        `SELECT 1 FROM participants 
+         WHERE pacte_id = ? AND discord_id = ? 
+           AND signed_at IS NOT NULL 
+           AND left_at IS NULL 
+           AND kicked_at IS NULL`,
+        [pacteId, discordId]
+    );
+    return !!result;
+}
+
 module.exports = {
     createUser,
     getUserByDiscordId,
@@ -474,5 +535,7 @@ module.exports = {
     joinPacte,
     updateBestStreak,
     resetMonthlyPoints,
-    cleanupExpiredPactes
+    cleanupExpiredPactes,
+    kickParticipant,
+    isParticipant
 };

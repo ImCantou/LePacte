@@ -1,5 +1,5 @@
 const { SlashCommandBuilder, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ActionRowBuilder, ComponentType } = require('discord.js');
-const { createPacte, getUserByDiscordId, getActiveUserPacte } = require('../services/userManager');
+const { createPacte, getUserByDiscordId, getActiveUserPacte, getPacteParticipants } = require('../services/userManager');
 const { PACTE_RULES } = require('../utils/constants');
 const { calculatePoints, calculateMalus } = require('../services/pointsCalculator');
 const logger = require('../utils/logger');
@@ -35,7 +35,16 @@ module.exports = {
         .addSubcommand(subcommand =>
             subcommand
                 .setName('join')
-                .setDescription('Rejoindre un pacte existant (si 0 victoire)')),
+                .setDescription('Rejoindre un pacte existant (si 0 victoire)'))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('kick')
+                .setDescription('Voter pour exclure un participant du pacte')
+                .addUserOption(option =>
+                    option
+                        .setName('joueur')
+                        .setDescription('Le joueur à exclure')
+                        .setRequired(true))),
 
     async execute(interaction) {
         const subcommand = interaction.options.getSubcommand();
@@ -52,6 +61,9 @@ module.exports = {
                 break;
             case 'join':
                 await handleJoinPacte(interaction);
+                break;
+            case 'kick':
+                await handleKickPacte(interaction);
                 break;
         }
     }
@@ -275,12 +287,48 @@ async function handleJoinPacte(interaction) {
         try {
             await joinPacte(pacte.id, interaction.user.id);
             
-            await interaction.reply({
-                content: `✅ **Vous avez rejoint le pacte #${pacte.id} !**\n` +
-                        `🎯 **Objectif :** ${pacte.objective} victoires consécutives\n` +
-                        `👥 **Participants :** ${pacte.participant_count + 1}/5\n\n` +
-                        '✍️ Écrivez **"Je signe"** pour valider votre participation.'
-            });
+            // Tenter de signer automatiquement après avoir rejoint
+            const { signPacte } = require('../services/userManager');
+            const signResult = await signPacte(pacte.id, interaction.user.id);
+            
+            if (!signResult.allSigned) {
+                // Pas encore tous signés, afficher le progrès
+                await interaction.reply({
+                    content: `✅ **Vous avez rejoint le pacte #${pacte.id} et signé !**\n` +
+                            `🎯 **Objectif :** ${pacte.objective} victoires consécutives\n` +
+                            `👥 **Participants :** ${pacte.participant_count + 1}/5\n` +
+                            `📝 **Signatures :** ${signResult.signedCount}/${signResult.totalParticipants}\n\n` +
+                            `⏳ En attente de ${signResult.totalParticipants - signResult.signedCount} signature(s) supplémentaire(s).`
+                });
+                
+                // Log du nouveau participant
+                const logChannel = interaction.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
+                if (logChannel) {
+                    await logChannel.send(
+                        `➕ **NOUVEAU PARTICIPANT** - Pacte #${pacte.id}\n` +
+                        `<@${interaction.user.id}> a rejoint le pacte et signé automatiquement !`
+                    );
+                }
+            } else {
+                // Tous ont signé, pacte activé
+                await interaction.reply({
+                    content: `🎉 **Pacte #${pacte.id} ACTIVÉ !**\n` +
+                            `Vous avez rejoint et tous les participants ont signé !\n` +
+                            `🎯 **Objectif :** ${pacte.objective} victoires consécutives\n` +
+                            `👥 **Équipe complète :** ${signResult.participantNames}`
+                });
+                
+                // Log de l'activation
+                const logChannel = interaction.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
+                if (logChannel) {
+                    await logChannel.send(
+                        `🚀 **PACTE ACTIVÉ** - Pacte #${pacte.id}\n` +
+                        `Dernier participant : <@${interaction.user.id}>\n` +
+                        `Équipe : ${signResult.participantNames}\n` +
+                        `Objectif : ${pacte.objective} victoires consécutives`
+                    );
+                }
+            }
             
         } catch (error) {
             await interaction.reply({
@@ -337,14 +385,52 @@ async function handleJoinPacte(interaction) {
             try {
                 await joinPacte(selectedPacteId, interaction.user.id);
                 
-                await confirmation.update({
-                    content: `✅ **Vous avez rejoint le pacte #${selectedPacteId} !**\n` +
-                            `🎯 **Objectif :** ${selectedPacte.objective} victoires consécutives\n` +
-                            `👥 **Participants :** ${selectedPacte.participant_count + 1}/5\n\n` +
-                            '✍️ Écrivez **"Je signe"** dans le canal pour valider votre participation.',
-                    embeds: [],
-                    components: []
-                });
+                // Tenter de signer automatiquement après avoir rejoint
+                const { signPacte } = require('../services/userManager');
+                const signResult = await signPacte(selectedPacteId, interaction.user.id);
+                
+                if (!signResult.allSigned) {
+                    // Pas encore tous signés, afficher le progrès
+                    await confirmation.update({
+                        content: `✅ **Vous avez rejoint le pacte #${selectedPacteId} et signé !**\n` +
+                                `🎯 **Objectif :** ${selectedPacte.objective} victoires consécutives\n` +
+                                `👥 **Participants :** ${selectedPacte.participant_count + 1}/5\n` +
+                                `📝 **Signatures :** ${signResult.signedCount}/${signResult.totalParticipants}\n\n` +
+                                `⏳ En attente de ${signResult.totalParticipants - signResult.signedCount} signature(s) supplémentaire(s).`,
+                        embeds: [],
+                        components: []
+                    });
+                    
+                    // Log du nouveau participant
+                    const logChannel = interaction.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
+                    if (logChannel) {
+                        await logChannel.send(
+                            `➕ **NOUVEAU PARTICIPANT** - Pacte #${selectedPacteId}\n` +
+                            `<@${interaction.user.id}> a rejoint le pacte et signé automatiquement !`
+                        );
+                    }
+                } else {
+                    // Tous ont signé, pacte activé
+                    await confirmation.update({
+                        content: `🎉 **Pacte #${selectedPacteId} ACTIVÉ !**\n` +
+                                `Vous avez rejoint et tous les participants ont signé !\n` +
+                                `🎯 **Objectif :** ${selectedPacte.objective} victoires consécutives\n` +
+                                `👥 **Équipe complète :** ${signResult.participantNames}`,
+                        embeds: [],
+                        components: []
+                    });
+                    
+                    // Log de l'activation
+                    const logChannel = interaction.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
+                    if (logChannel) {
+                        await logChannel.send(
+                            `🚀 **PACTE ACTIVÉ** - Pacte #${selectedPacteId}\n` +
+                            `Dernier participant : <@${interaction.user.id}>\n` +
+                            `Équipe : ${signResult.participantNames}\n` +
+                            `Objectif : ${selectedPacte.objective} victoires consécutives`
+                        );
+                    }
+                }
                 
             } catch (error) {
                 await confirmation.update({
@@ -353,14 +439,147 @@ async function handleJoinPacte(interaction) {
                     components: []
                 });
             }
-            
         } catch (error) {
-            // Timeout ou erreur
+            // Timeout ou erreur de sélection
             await interaction.editReply({
                 content: '⏰ Temps écoulé ! Utilisez à nouveau `/pacte join` pour rejoindre un pacte.',
                 embeds: [],
                 components: []
             });
         }
+}
+
+// Nouvelle fonction handleKickPacte
+async function handleKickPacte(interaction) {
+    const targetUser = interaction.options.getUser('joueur');
+    const voterId = interaction.user.id;
+    
+    // Vérifier que le votant est dans un pacte actif
+    const activePacte = await getActiveUserPacte(voterId);
+    if (!activePacte) {
+        return interaction.reply({
+            content: '❌ Vous n\'avez pas de pacte actif.',
+            ephemeral: true
+        });
     }
+    
+    // Vérifier que la cible est dans le même pacte
+    const { isParticipant } = require('../services/userManager');
+    const targetInPacte = await isParticipant(activePacte.id, targetUser.id);
+    
+    if (!targetInPacte) {
+        return interaction.reply({
+            content: '❌ Ce joueur n\'est pas dans votre pacte.',
+            ephemeral: true
+        });
+    }
+    
+    // Ne pas pouvoir se kick soi-même
+    if (voterId === targetUser.id) {
+        return interaction.reply({
+            content: '❌ Vous ne pouvez pas vous exclure vous-même. Utilisez `/pacte leave`.',
+            ephemeral: true
+        });
+    }
+    
+    // Récupérer tous les participants actifs sauf la cible
+    const participants = await getPacteParticipants(activePacte.id);
+    const voters = participants.filter(p => p.discord_id !== targetUser.id);
+    
+    if (voters.length < 2) {
+        return interaction.reply({
+            content: '❌ Il faut au moins 2 participants (hors cible) pour lancer un vote.',
+            ephemeral: true
+        });
+    }
+    
+    // Créer l'embed de vote
+    const voteEmbed = new EmbedBuilder()
+        .setColor(0xFF0000)
+        .setTitle('🗳️ Vote d\'exclusion')
+        .setDescription(`Vote pour exclure **${targetUser.username}** du pacte #${activePacte.id}`)
+        .addFields(
+            { name: '📊 Votes requis', value: `${voters.length} votes unanimes (tous sauf la cible)`, inline: true },
+            { name: '⏱️ Durée du vote', value: '2 minutes', inline: true }
+        )
+        .setFooter({ text: 'Réagissez avec ✅ pour voter OUI, ❌ pour voter NON' });
+    
+    const voteMessage = await interaction.reply({
+        embeds: [voteEmbed],
+        fetchReply: true
+    });
+    
+    await voteMessage.react('✅');
+    await voteMessage.react('❌');
+    
+    // Créer les collecteurs
+    const yesFilter = (reaction, user) => reaction.emoji.name === '✅' && voters.some(v => v.discord_id === user.id);
+    const noFilter = (reaction, user) => reaction.emoji.name === '❌' && voters.some(v => v.discord_id === user.id);
+    
+    const yesCollector = voteMessage.createReactionCollector({ filter: yesFilter, time: 120000 });
+    const noCollector = voteMessage.createReactionCollector({ filter: noFilter, time: 120000 });
+    
+    const votes = new Map();
+    voters.forEach(v => votes.set(v.discord_id, null));
+    
+    yesCollector.on('collect', (reaction, user) => {
+        votes.set(user.id, true);
+        logger.info(`Vote YES from ${user.id} for kicking ${targetUser.id} from pacte #${activePacte.id}`);
+    });
+    
+    noCollector.on('collect', (reaction, user) => {
+        votes.set(user.id, false);
+        logger.info(`Vote NO from ${user.id} for kicking ${targetUser.id} from pacte #${activePacte.id}`);
+    });
+    
+    yesCollector.on('end', async () => {
+        const yesVotes = Array.from(votes.values()).filter(v => v === true).length;
+        const noVotes = Array.from(votes.values()).filter(v => v === false).length;
+        const abstentions = voters.length - yesVotes - noVotes;
+        
+        let resultEmbed;
+        
+        if (yesVotes === voters.length) {
+            // Vote unanime - kick
+            const { kickParticipant } = require('../services/userManager');
+            const malus = calculateMalus(activePacte.objective, activePacte.best_streak_reached);
+            
+            await kickParticipant(activePacte.id, targetUser.id, malus, 'Vote unanime des participants');
+            
+            resultEmbed = new EmbedBuilder()
+                .setColor(0xFF0000)
+                .setTitle('⚠️ Exclusion confirmée')
+                .setDescription(`${targetUser} a été exclu du pacte #${activePacte.id}`)
+                .addFields(
+                    { name: '✅ Pour', value: `${yesVotes}`, inline: true },
+                    { name: '❌ Contre', value: `${noVotes}`, inline: true },
+                    { name: '🤷 Abstention', value: `${abstentions}`, inline: true },
+                    { name: '💸 Malus appliqué', value: `-${malus} points`, inline: false }
+                );
+            
+            // Log dans le canal
+            const logChannel = interaction.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
+            if (logChannel) {
+                await logChannel.send(
+                    `👢 **EXCLUSION PAR VOTE** - Pacte #${activePacte.id}\n` +
+                    `${targetUser} a été exclu suite à un vote unanime.\n` +
+                    `Malus : -${malus} points`
+                );
+            }
+        } else {
+            // Vote non unanime - pas de kick
+            resultEmbed = new EmbedBuilder()
+                .setColor(0x00FF00)
+                .setTitle('✅ Vote rejeté')
+                .setDescription(`${targetUser} reste dans le pacte (vote non unanime)`)
+                .addFields(
+                    { name: '✅ Pour', value: `${yesVotes}`, inline: true },
+                    { name: '❌ Contre', value: `${noVotes}`, inline: true },
+                    { name: '🤷 Abstention', value: `${abstentions}`, inline: true }
+                );
+        }
+        
+        await interaction.followUp({ embeds: [resultEmbed] });
+    });
+}
 }

@@ -2,6 +2,7 @@ const { getDb } = require('./database');
 const { resetMonthlyPoints, completePacte, cleanupExpiredPactes } = require('../services/userManager');
 const { calculatePoints, calculateMalus } = require('../services/pointsCalculator');
 const { sendTimeWarningTaunt } = require('../services/pacteManager');
+const { cleanupOldMatchHistory } = require('../services/gameHistoryService');
 const logger = require('./logger');
 
 async function checkExpiredPactes(client) {
@@ -88,34 +89,39 @@ async function checkMonthlyReset() {
     }
 }
 
+async function cleanupOldData() {
+    try {
+        // Nettoyer l'historique des games (plus de 30 jours)
+        const cleanedMatches = await cleanupOldMatchHistory();
+        if (cleanedMatches > 0) {
+            logger.info(`Cleaned up ${cleanedMatches} old match records`);
+        }
+        
+        // Nettoyer les pactes expirés
+        const cleanedPactes = await cleanupExpiredPactes();
+        if (cleanedPactes > 0) {
+            logger.info(`Cleaned up ${cleanedPactes} expired pactes`);
+        }
+        
+    } catch (error) {
+        logger.error('Error during scheduled cleanup:', error);
+    }
+}
+
 async function initScheduledTasks(client) {
-    // Ajouter la colonne warning_sent si elle n'existe pas
-    const db = getDb();
-    await db.run(`
-        ALTER TABLE pactes ADD COLUMN warning_sent INTEGER DEFAULT 0
-    `).catch(() => {}); // Ignorer si elle existe déjà
-    
-    // Créer la table config si elle n'existe pas
-    await db.run(`
-        CREATE TABLE IF NOT EXISTS config (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    `);
-    
-    // Vérifier toutes les 5 minutes
-    setInterval(async () => {
-        await checkExpiredPactes(client);
-        await sendWarnings(client);
-        await cleanupExpiredPactes(); // Nettoyer les pactes en attente expirés
+    // Toutes les 5 minutes: vérifier les pactes expirés et envoyer les warnings
+    setInterval(() => {
+        checkExpiredPactes(client);
+        sendWarnings(client);
     }, 5 * 60 * 1000);
     
-    // Vérifier la réinitialisation mensuelle toutes les heures
-    setInterval(async () => {
-        await checkMonthlyReset();
-    }, 60 * 60 * 1000);
+    // Tous les jours à 00:00: reset mensuel et nettoyage
+    setInterval(() => {
+        checkMonthlyReset();
+        cleanupOldData();
+    }, 24 * 60 * 60 * 1000);
     
-    // Vérifier immédiatement au démarrage
+    // Exécution immédiate au démarrage
     await checkExpiredPactes(client);
     await checkMonthlyReset();
     await cleanupExpiredPactes(); // Nettoyer au démarrage
@@ -127,5 +133,6 @@ module.exports = {
     initScheduledTasks,
     checkExpiredPactes,
     sendWarnings,
-    checkMonthlyReset
-};
+    checkMonthlyReset,
+    cleanupOldData
+};;

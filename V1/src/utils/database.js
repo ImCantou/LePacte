@@ -33,15 +33,16 @@ async function initDatabase() {
 
         CREATE TABLE IF NOT EXISTS pactes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            objective INTEGER NOT NULL,
-            status TEXT DEFAULT 'pending',
-            current_wins INTEGER DEFAULT 0,
+            objective INTEGER NOT NULL CHECK (objective >= 3 AND objective <= 10),
+            status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'success', 'failed')),
+            current_wins INTEGER DEFAULT 0 CHECK (current_wins >= 0),
             best_streak_reached INTEGER DEFAULT 0,
             in_game BOOLEAN DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             started_at TIMESTAMP,
             completed_at TIMESTAMP,
-            log_channel_id TEXT
+            log_channel_id TEXT,
+            last_checked TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS participants (
@@ -50,6 +51,8 @@ async function initDatabase() {
             signed_at TIMESTAMP,
             left_at TIMESTAMP,
             points_gained INTEGER DEFAULT 0,
+            kicked_at TIMESTAMP,
+            kick_reason TEXT,
             PRIMARY KEY (pacte_id, discord_id),
             FOREIGN KEY (pacte_id) REFERENCES pactes(id),
             FOREIGN KEY (discord_id) REFERENCES users(discord_id)
@@ -64,15 +67,28 @@ async function initDatabase() {
             FOREIGN KEY (discord_id) REFERENCES users(discord_id)
         );
 
+        CREATE TABLE IF NOT EXISTS game_history (
+            match_id TEXT PRIMARY KEY,
+            pacte_id INTEGER,
+            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            result TEXT CHECK (result IN ('win', 'loss')),
+            FOREIGN KEY (pacte_id) REFERENCES pactes(id)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_pactes_status ON pactes(status);
         CREATE INDEX IF NOT EXISTS idx_pactes_channel ON pactes(log_channel_id);
         CREATE INDEX IF NOT EXISTS idx_pactes_created_at ON pactes(created_at);
+        CREATE INDEX IF NOT EXISTS idx_pactes_last_checked ON pactes(last_checked);
         CREATE INDEX IF NOT EXISTS idx_users_points ON users(points_total);
         CREATE INDEX IF NOT EXISTS idx_participants_pacte ON participants(pacte_id);
         CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(discord_id);
         CREATE INDEX IF NOT EXISTS idx_participants_signed ON participants(signed_at);
         CREATE INDEX IF NOT EXISTS idx_participants_left ON participants(left_at);
+        CREATE INDEX IF NOT EXISTS idx_participants_kicked ON participants(kicked_at);
         CREATE INDEX IF NOT EXISTS idx_monthly_history ON monthly_history(discord_id, month);
+        CREATE INDEX IF NOT EXISTS idx_game_history_match ON game_history(match_id);
+        CREATE INDEX IF NOT EXISTS idx_game_history_pacte ON game_history(pacte_id);
+        CREATE INDEX IF NOT EXISTS idx_game_history_processed ON game_history(processed_at);
     `);
 
     // Migration pour ajouter created_at si elle n'existe pas
