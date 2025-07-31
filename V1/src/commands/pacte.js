@@ -189,15 +189,97 @@ async function handleStatusPacte(interaction) {
 }
 
 async function handleLeavePacte(interaction) {
+    const activePacte = await getActiveUserPacte(interaction.user.id);
+    
+    if (!activePacte) {
+        return interaction.reply({
+            content: '❌ Vous n\'avez pas de pacte actif.',
+            ephemeral: true
+        });
+    }
+    
+    // Calculer le malus
+    const malus = calculateMalus(activePacte.objective, activePacte.best_streak_reached);
+    
+    // Confirmation
+    const confirmEmbed = new EmbedBuilder()
+        .setColor(0xFF0000)
+        .setTitle('⚠️ Quitter le pacte ?')
+        .setDescription(`Êtes-vous sûr de vouloir abandonner le pacte #${activePacte.id} ?`)
+        .addFields(
+            { name: 'Malus', value: `-${malus} points`, inline: true },
+            { name: 'Meilleure série', value: `${activePacte.best_streak_reached}/${activePacte.objective}`, inline: true }
+        );
+    
     await interaction.reply({
-        content: '⚠️ Cette fonctionnalité sera disponible prochainement.',
+        embeds: [confirmEmbed],
+        content: 'Répondez "ABANDON" pour confirmer (30 secondes)',
         ephemeral: true
+    });
+    
+    const filter = m => m.author.id === interaction.user.id && m.content.toLowerCase() === 'abandon';
+    const collector = interaction.channel.createMessageCollector({ filter, time: 30000, max: 1 });
+    
+    collector.on('collect', async () => {
+        const { leavePacte } = require('../services/userManager');
+        await leavePacte(activePacte.id, interaction.user.id, malus);
+        
+        await interaction.followUp({
+            content: `💔 Vous avez quitté le pacte. -${malus} points.`,
+            ephemeral: true
+        });
+        
+        // Notifier dans le canal de logs
+        const logChannel = interaction.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
+        if (logChannel) {
+            await logChannel.send(`⚠️ <@${interaction.user.id}> a abandonné le pacte #${activePacte.id}. Malus: -${malus} points.`);
+        }
+    });
+    
+    collector.on('end', collected => {
+        if (collected.size === 0) {
+            interaction.followUp({ content: 'Abandon annulé.', ephemeral: true });
+        }
     });
 }
 
 async function handleJoinPacte(interaction) {
-    await interaction.reply({
-        content: '⚠️ Cette fonctionnalité sera disponible prochainement.',
-        ephemeral: true
-    });
+    const user = await getUserByDiscordId(interaction.user.id);
+    if (!user) {
+        return interaction.reply({
+            content: '❌ Vous devez d\'abord vous enregistrer avec /register',
+            ephemeral: true
+        });
+    }
+    
+    // Chercher un pacte en attente dans ce canal avec 0 victoires
+    const { getJoinablePacte, joinPacte } = require('../services/userManager');
+    const joinablePacte = await getJoinablePacte(interaction.channelId);
+    
+    if (!joinablePacte) {
+        return interaction.reply({
+            content: '❌ Aucun pacte rejoinable dans ce canal (doit être à 0 victoire).',
+            ephemeral: true
+        });
+    }
+    
+    try {
+        await joinPacte(joinablePacte.id, interaction.user.id);
+        
+        await interaction.reply({
+            content: `✅ Vous avez rejoint le pacte #${joinablePacte.id} ! Écrivez **"Je signe"** pour valider votre participation.`
+        });
+        
+        // Ajouter aux participants en attente de signature
+        if (interaction.client.pendingPactes.has(joinablePacte.id)) {
+            const pacteData = interaction.client.pendingPactes.get(joinablePacte.id);
+            pacteData.participants.push(interaction.user.id);
+        }
+        
+    } catch (error) {
+        await interaction.reply({
+            content: `❌ Erreur: ${error.message}`,
+            ephemeral: true
+        });
+    }
 }

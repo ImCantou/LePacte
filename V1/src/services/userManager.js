@@ -162,6 +162,89 @@ async function getPacteParticipants(pacteId) {
     );
 }
 
+async function leavePacte(pacteId, discordId, malus) {
+    const db = getDb();
+    
+    // Marquer comme parti
+    await db.run(
+        'UPDATE participants SET left_at = CURRENT_TIMESTAMP, points_gained = ? WHERE pacte_id = ? AND discord_id = ?',
+        [-malus, pacteId, discordId]
+    );
+    
+    // Appliquer le malus
+    await updateUserPoints(discordId, -malus);
+    
+    // Vérifier s'il reste des participants actifs
+    const activeParticipants = await db.get(
+        'SELECT COUNT(*) as count FROM participants WHERE pacte_id = ? AND signed_at IS NOT NULL AND left_at IS NULL',
+        pacteId
+    );
+    
+    if (activeParticipants.count === 0) {
+        // Tous les participants sont partis, échec du pacte
+        await db.run(
+            'UPDATE pactes SET status = "failed", completed_at = CURRENT_TIMESTAMP WHERE id = ?',
+            pacteId
+        );
+    }
+    
+    logger.info(`User ${discordId} left pacte #${pacteId} with malus: -${malus}`);
+}
+
+async function getJoinablePacte(channelId) {
+    const db = getDb();
+    return await db.get(
+        `SELECT p.* FROM pactes p
+         WHERE p.log_channel_id = ? 
+         AND p.status = 'active' 
+         AND p.current_wins = 0
+         AND (SELECT COUNT(*) FROM participants WHERE pacte_id = p.id AND signed_at IS NOT NULL) < 5`,
+        channelId
+    );
+}
+
+async function joinPacte(pacteId, discordId) {
+    const db = getDb();
+    
+    // Vérifier si déjà dans un pacte actif
+    const activePacte = await getActiveUserPacte(discordId);
+    if (activePacte) {
+        throw new Error('Vous avez déjà un pacte actif !');
+    }
+    
+    // Vérifier si déjà dans ce pacte
+    const existing = await db.get(
+        'SELECT * FROM participants WHERE pacte_id = ? AND discord_id = ?',
+        [pacteId, discordId]
+    );
+    
+    if (existing) {
+        throw new Error('Vous êtes déjà dans ce pacte !');
+    }
+    
+    // Ajouter comme participant
+    await db.run(
+        'INSERT INTO participants (pacte_id, discord_id) VALUES (?, ?)',
+        [pacteId, discordId]
+    );
+    
+    logger.info(`User ${discordId} joined pacte #${pacteId}`);
+}
+
+async function updateBestStreak(discordId, streak) {
+    const db = getDb();
+    await db.run(
+        'UPDATE users SET best_streak_ever = MAX(best_streak_ever, ?) WHERE discord_id = ?',
+        [streak, discordId]
+    );
+}
+
+async function resetMonthlyPoints() {
+    const db = getDb();
+    await db.run('UPDATE users SET points_monthly = 0');
+    logger.info('Monthly points reset');
+}
+
 module.exports = {
     createUser,
     getUserByDiscordId,
@@ -173,5 +256,10 @@ module.exports = {
     getActiveUserPacte,
     updatePacteStatus,
     completePacte,
-    getPacteParticipants
+    getPacteParticipants,
+    leavePacte,
+    getJoinablePacte,
+    joinPacte,
+    updateBestStreak,
+    resetMonthlyPoints
 };

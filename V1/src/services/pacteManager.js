@@ -93,9 +93,16 @@ async function getLastGameResult(participants) {
 
 async function processGameResult(pacte, gameResult, client) {
     const channel = client.channels.cache.get(pacte.log_channel_id);
+    const participants = await getPacteParticipants(pacte.id);
     
     if (gameResult.win) {
         const newWins = pacte.current_wins + 1;
+        
+        // Mettre à jour les meilleures séries des joueurs
+        const { updateBestStreak } = require('./userManager');
+        for (const participant of participants) {
+            await updateBestStreak(participant.discord_id, newWins);
+        }
         
         if (newWins >= pacte.objective) {
             // Pacte success

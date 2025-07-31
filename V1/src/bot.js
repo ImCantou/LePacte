@@ -5,6 +5,7 @@ const path = require('path');
 const { initDatabase } = require('./utils/database');
 const logger = require('./utils/logger');
 const { startPolling } = require('./services/pacteManager');
+const { initScheduledTasks } = require('./utils/scheduledTasks');
 
 const client = new Client({
     intents: [
