@@ -7,7 +7,7 @@ module.exports = {
         if (message.author.bot) return;
         
         // Check for "Je signe" message
-        if (message.content.toLowerCase() === 'je signe') {
+        if (message.content.trim().toLowerCase() === 'je signe') {
             const client = message.client;
             
             // Find pending pacte in this channel
