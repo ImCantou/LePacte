@@ -1,8 +1,0 @@
-# ligne seule
-
-node_modules/
-.env
-*.sqlite
-data/*.db
-
-# ligne seule
