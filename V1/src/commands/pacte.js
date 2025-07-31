@@ -2,6 +2,7 @@ const { SlashCommandBuilder, EmbedBuilder, StringSelectMenuBuilder, StringSelect
 const { createPacte, getUserByDiscordId, getActiveUserPacte } = require('../services/userManager');
 const { PACTE_RULES } = require('../utils/constants');
 const { calculatePoints, calculateMalus } = require('../services/pointsCalculator');
+const logger = require('../utils/logger');
 
 module.exports = {
     data: new SlashCommandBuilder()
