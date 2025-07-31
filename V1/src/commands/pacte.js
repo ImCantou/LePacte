@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ActionRowBuilder, ComponentType } = require('discord.js');
 const { createPacte, getUserByDiscordId, getActiveUserPacte } = require('../services/userManager');
 const { PACTE_RULES } = require('../utils/constants');
 const { calculatePoints, calculateMalus } = require('../services/pointsCalculator');
@@ -252,34 +252,122 @@ async function handleJoinPacte(interaction) {
         });
     }
     
-    // Chercher un pacte en attente dans ce canal avec 0 victoires
-    const { getJoinablePacte, joinPacte } = require('../services/userManager');
-    const joinablePacte = await getJoinablePacte(interaction.channelId);
+    // Chercher tous les pactes rejoinables dans ce canal
+    const { getAllJoinablePactes, joinPacte } = require('../services/userManager');
+    const joinablePactes = await getAllJoinablePactes(interaction.channelId);
     
-    if (!joinablePacte) {
+    if (joinablePactes.length === 0) {
         return interaction.reply({
-            content: '❌ Aucun pacte rejoinable dans ce canal (doit être à 0 victoire).',
+            content: '❌ Aucun pacte rejoinable dans ce canal.\n' +
+                    '💡 Les pactes doivent être à 0 victoire et avoir moins de 5 participants.',
             ephemeral: true
         });
     }
     
-    try {
-        await joinPacte(joinablePacte.id, interaction.user.id);
-        
-        await interaction.reply({
-            content: `✅ Vous avez rejoint le pacte #${joinablePacte.id} ! Écrivez **"Je signe"** pour valider votre participation.`
-        });
-        
-        // Ajouter aux participants en attente de signature
-        if (interaction.client.pendingPactes.has(joinablePacte.id)) {
-            const pacteData = interaction.client.pendingPactes.get(joinablePacte.id);
-            pacteData.participants.push(interaction.user.id);
+    if (joinablePactes.length === 1) {
+        // Un seul pacte disponible, rejoindre directement
+        const pacte = joinablePactes[0];
+        try {
+            await joinPacte(pacte.id, interaction.user.id);
+            
+            await interaction.reply({
+                content: `✅ **Vous avez rejoint le pacte #${pacte.id} !**\n` +
+                        `🎯 **Objectif :** ${pacte.objective} victoires consécutives\n` +
+                        `👥 **Participants :** ${pacte.participant_count + 1}/5\n\n` +
+                        '✍️ Écrivez **"Je signe"** pour valider votre participation.'
+            });
+            
+            // Ajouter aux participants en attente de signature
+            if (interaction.client.pendingPactes.has(pacte.id)) {
+                const pacteData = interaction.client.pendingPactes.get(pacte.id);
+                pacteData.participants.push(interaction.user.id);
+            }
+            
+        } catch (error) {
+            await interaction.reply({
+                content: `❌ Erreur: ${error.message}`,
+                ephemeral: true
+            });
         }
+    } else {
+        // Plusieurs pactes disponibles, afficher un menu de sélection
+        const selectMenu = new StringSelectMenuBuilder()
+            .setCustomId('select_pacte_to_join')
+            .setPlaceholder('Choisissez le pacte à rejoindre...')
+            .addOptions(
+                joinablePactes.map(pacte => 
+                    new StringSelectMenuOptionBuilder()
+                        .setLabel(`Pacte #${pacte.id}`)
+                        .setDescription(`${pacte.objective} victoires • ${pacte.participant_count}/5 participants`)
+                        .setValue(pacte.id.toString())
+                )
+            );
         
-    } catch (error) {
-        await interaction.reply({
-            content: `❌ Erreur: ${error.message}`,
+        const row = new ActionRowBuilder().addComponents(selectMenu);
+        
+        const embed = new EmbedBuilder()
+            .setColor(0x00AE86)
+            .setTitle('🎯 Pactes disponibles')
+            .setDescription('Plusieurs pactes sont disponibles dans ce canal. Choisissez celui que vous souhaitez rejoindre :')
+            .addFields(
+                joinablePactes.map(pacte => ({
+                    name: `Pacte #${pacte.id}`,
+                    value: `🎯 **Objectif :** ${pacte.objective} victoires consécutives\n👥 **Participants :** ${pacte.participant_count}/5\n📅 **Statut :** ${pacte.status === 'pending' ? 'En attente de signatures' : 'Actif'}`,
+                    inline: true
+                }))
+            )
+            .setFooter({ text: 'Vous avez 30 secondes pour choisir' });
+        
+        const response = await interaction.reply({
+            embeds: [embed],
+            components: [row],
             ephemeral: true
         });
+        
+        // Écouter la sélection
+        try {
+            const confirmation = await response.awaitMessageComponent({
+                componentType: ComponentType.StringSelect,
+                time: 30000,
+                filter: i => i.user.id === interaction.user.id
+            });
+            
+            const selectedPacteId = parseInt(confirmation.values[0]);
+            const selectedPacte = joinablePactes.find(p => p.id === selectedPacteId);
+            
+            try {
+                await joinPacte(selectedPacteId, interaction.user.id);
+                
+                await confirmation.update({
+                    content: `✅ **Vous avez rejoint le pacte #${selectedPacteId} !**\n` +
+                            `🎯 **Objectif :** ${selectedPacte.objective} victoires consécutives\n` +
+                            `👥 **Participants :** ${selectedPacte.participant_count + 1}/5\n\n` +
+                            '✍️ Écrivez **"Je signe"** dans le canal pour valider votre participation.',
+                    embeds: [],
+                    components: []
+                });
+                
+                // Ajouter aux participants en attente de signature
+                if (interaction.client.pendingPactes.has(selectedPacteId)) {
+                    const pacteData = interaction.client.pendingPactes.get(selectedPacteId);
+                    pacteData.participants.push(interaction.user.id);
+                }
+                
+            } catch (error) {
+                await confirmation.update({
+                    content: `❌ Erreur: ${error.message}`,
+                    embeds: [],
+                    components: []
+                });
+            }
+            
+        } catch (error) {
+            // Timeout ou erreur
+            await interaction.editReply({
+                content: '⏰ Temps écoulé ! Utilisez à nouveau `/pacte join` pour rejoindre un pacte.',
+                embeds: [],
+                components: []
+            });
+        }
     }
 }

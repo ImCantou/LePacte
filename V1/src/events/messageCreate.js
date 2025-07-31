@@ -25,7 +25,11 @@ module.exports = {
             
             // Check if already signed
             if (foundPacte.data.signatures.includes(message.author.id)) {
-                return message.reply('Vous avez déjà signé ce pacte !');
+                await message.react('⚠️');
+                return message.reply({
+                    content: '⚠️ Vous avez déjà signé ce pacte !',
+                    allowedMentions: { repliedUser: false }
+                });
             }
             
             // Add signature
@@ -35,6 +39,19 @@ module.exports = {
                 const allSigned = await signPacte(foundPacte.id, message.author.id);
                 
                 await message.react('✅');
+                
+                // Compter les signatures
+                const signatureCount = foundPacte.data.signatures.length;
+                const totalParticipants = foundPacte.data.participants.length;
+                
+                if (!allSigned) {
+                    // Pas encore tous signés, afficher le progrès
+                    await message.reply({
+                        content: `✅ **Signature confirmée !** (${signatureCount}/${totalParticipants})\n` +
+                                `En attente de ${totalParticipants - signatureCount} signature(s) supplémentaire(s).`,
+                        allowedMentions: { repliedUser: false }
+                    });
+                }
                 
                 if (allSigned) {
                     // All participants signed

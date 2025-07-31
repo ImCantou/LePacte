@@ -203,6 +203,20 @@ async function getJoinablePacte(channelId) {
     );
 }
 
+async function getAllJoinablePactes(channelId) {
+    const db = getDb();
+    return await db.all(
+        `SELECT p.*, 
+                (SELECT COUNT(*) FROM participants WHERE pacte_id = p.id AND signed_at IS NOT NULL) as participant_count
+         FROM pactes p
+         WHERE p.log_channel_id = ? 
+         AND p.status IN ('pending', 'active')
+         AND p.current_wins = 0
+         AND (SELECT COUNT(*) FROM participants WHERE pacte_id = p.id AND signed_at IS NOT NULL) < 5`,
+        channelId
+    );
+}
+
 async function joinPacte(pacteId, discordId) {
     const db = getDb();
     
@@ -259,6 +273,7 @@ module.exports = {
     getPacteParticipants,
     leavePacte,
     getJoinablePacte,
+    getAllJoinablePactes,
     joinPacte,
     updateBestStreak,
     resetMonthlyPoints

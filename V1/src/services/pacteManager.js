@@ -1,6 +1,7 @@
 const { getCurrentGame, getMatchHistory, getMatchDetails } = require('./riotApi');
 const { getActivePactes, updatePacteStatus, completePacte: completeInDb, getPacteParticipants: getFromDb } = require('./userManager');
 const { calculatePoints, calculateMalus } = require('./pointsCalculator');
+const { TAUNTS } = require('../utils/constants');
 const logger = require('../utils/logger');
 
 let pollingInterval;
@@ -121,8 +122,11 @@ async function processGameResult(pacte, gameResult, client) {
             });
             
             await channel.send({
-                content: `✅ Victoire ! ${newWins}/${pacte.objective} ${getRandomTaunt(pacte)}`
+                content: `✅ **Victoire !** ${newWins}/${pacte.objective}`
             });
+            
+            // Envoyer un taunt automatique après la victoire
+            await sendRandomTaunt(pacte, channel, newWins);
         }
     } else {
         // Defeat - pacte might fail
@@ -167,23 +171,71 @@ async function getPacteParticipants(pacteId) {
     return await getFromDb(pacteId);
 }
 
-function getRandomTaunt(pacte) {
-    const taunts = [
-        "Toujours là ?",
-        "La pression monte...",
-        "Une de plus ou c'est fini ?",
-        "Les dieux de l'ARAM vous observent",
-        "L'Abîme Hurlant retient son souffle..."
-    ];
+async function sendRandomTaunt(pacte, channel, currentWins) {
+    let shouldSendTaunt = false;
+    let tauntType = 'generic';
+    let delay = 5000; // 5 secondes par défaut
     
-    if (pacte.current_wins === pacte.objective - 1) {
-        return "**C'EST LA DERNIÈRE !**";
+    // Taunts garantis à certains moments clés
+    if (currentWins === 2) {
+        // Après 2 wins consécutives
+        shouldSendTaunt = true;
+        tauntType = 'twoWins';
+    } else if (currentWins === Math.ceil(pacte.objective / 2)) {
+        // À mi-parcours de l'objectif
+        shouldSendTaunt = true;
+        tauntType = 'midway';
+    } else if (currentWins === pacte.objective - 1) {
+        // C'est la dernière !
+        shouldSendTaunt = true;
+        tauntType = 'lastOne';
+        delay = 2000; // Plus rapide pour la tension
+    } else {
+        // 10% de chance de taunt après chaque autre victoire
+        shouldSendTaunt = Math.random() < 0.1;
+        tauntType = currentWins > pacte.objective / 2 ? 'victory' : 'generic';
     }
     
-    return taunts[Math.floor(Math.random() * taunts.length)];
+    if (shouldSendTaunt) {
+        setTimeout(async () => {
+            const taunt = getRandomTauntMessage(tauntType, pacte, currentWins);
+            await channel.send(`🎭 ${taunt}`);
+        }, delay);
+    }
+}
+
+function getRandomTauntMessage(type, pacte, currentWins) {
+    switch (type) {
+        case 'twoWins':
+            return "L'élan se dessine... Les dieux commencent à vous regarder !";
+            
+        case 'midway':
+            return `🔥 Mi-chemin franchi ! Les anciens murmurent votre nom... (${currentWins}/${pacte.objective})`;
+            
+        case 'lastOne':
+            return TAUNTS.lastOne;
+            
+        case 'victory':
+            const victoryTaunts = TAUNTS.victory;
+            return victoryTaunts[Math.floor(Math.random() * victoryTaunts.length)];
+            
+        case 'generic':
+        default:
+            const genericTaunts = TAUNTS.generic;
+            return genericTaunts[Math.floor(Math.random() * genericTaunts.length)];
+    }
+}
+
+// Fonction pour envoyer un taunt de temps qui s'écoule (à appeler depuis scheduledTasks)
+async function sendTimeWarningTaunt(pacte, channel, hoursLeft) {
+    if (hoursLeft <= 1 && pacte.current_wins > 0) {
+        const taunt = TAUNTS.timeRunningOut.replace('[HOURS]', hoursLeft);
+        await channel.send(`🎭 ${taunt}`);
+    }
 }
 
 module.exports = {
     startPolling,
-    checkPacteProgress
+    checkPacteProgress,
+    sendTimeWarningTaunt
 };

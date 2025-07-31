@@ -55,9 +55,27 @@ async function initDatabase() {
             FOREIGN KEY (discord_id) REFERENCES users(discord_id)
         );
 
+        CREATE TABLE IF NOT EXISTS monthly_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            discord_id TEXT,
+            month TEXT,
+            points_monthly INTEGER DEFAULT 0,
+            points_end_of_month INTEGER DEFAULT 0,
+            FOREIGN KEY (discord_id) REFERENCES users(discord_id)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_pactes_status ON pactes(status);
         CREATE INDEX IF NOT EXISTS idx_users_points ON users(points_total);
+        CREATE INDEX IF NOT EXISTS idx_monthly_history ON monthly_history(discord_id, month);
     `);
+
+    // Migration pour ajouter created_at si elle n'existe pas
+    try {
+        await db.run(`ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
+        logger.info('Added created_at column to users table');
+    } catch (error) {
+        // La colonne existe déjà ou autre erreur - ignorer
+    }
 
     logger.info('Database initialized');
 }
