@@ -68,10 +68,26 @@ async function createPacte(objective, participants, channelId) {
     return pacteId;
 }
 
+async function checkIfSigned(pacteId, discordId) {
+    const db = getDb();
+    const result = await db.get(
+        'SELECT signed_at FROM participants WHERE pacte_id = ? AND discord_id = ?',
+        [pacteId, discordId]
+    );
+    return result && result.signed_at !== null;
+}
+
 async function signPacte(pacteId, discordId) {
     const db = getDb();
+    
+    // Vérifier d'abord si déjà signé pour éviter les doublons
+    const alreadySigned = await checkIfSigned(pacteId, discordId);
+    if (alreadySigned) {
+        throw new Error('Utilisateur a déjà signé ce pacte');
+    }
+    
     await db.run(
-        'UPDATE participants SET signed_at = CURRENT_TIMESTAMP WHERE pacte_id = ? AND discord_id = ?',
+        'UPDATE participants SET signed_at = CURRENT_TIMESTAMP WHERE pacte_id = ? AND discord_id = ? AND signed_at IS NULL',
         [pacteId, discordId]
     );
     
@@ -270,6 +286,7 @@ module.exports = {
     getUserByPuuid,
     updateUserPoints,
     createPacte,
+    checkIfSigned,
     signPacte,
     getActivePactes,
     getActiveUserPacte,

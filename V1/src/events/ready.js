@@ -8,7 +8,6 @@ module.exports = {
         const { ActivityType } = require('discord.js');
             
         client.user.setActivity('les pactes ARAM', { type: ActivityType.Watching });        
-        // Initialize pending pactes collection
-        client.pendingPactes = new Map();
+        // pendingPactes est déjà initialisé dans bot.js, pas besoin de le réinitialiser
     }
 };

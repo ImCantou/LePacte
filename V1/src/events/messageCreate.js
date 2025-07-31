@@ -23,20 +23,26 @@ module.exports = {
             
             if (!foundPacte) return;
             
-            // Check if already signed
-            if (foundPacte.data.signatures.includes(message.author.id)) {
-                await message.react('⚠️');
-                return message.reply({
-                    content: '⚠️ Vous avez déjà signé ce pacte !',
-                    allowedMentions: { repliedUser: false }
-                });
-            }
-            
-            // Add signature
-            foundPacte.data.signatures.push(message.author.id);
-            
             try {
+                // Vérifier d'abord en base de données si déjà signé
+                const { checkIfSigned } = require('../services/userManager');
+                const alreadySigned = await checkIfSigned(foundPacte.id, message.author.id);
+                
+                if (alreadySigned) {
+                    await message.react('⚠️');
+                    return message.reply({
+                        content: '⚠️ Vous avez déjà signé ce pacte !',
+                        allowedMentions: { repliedUser: false }
+                    });
+                }
+                
+                // Tenter la signature en base (avec protection contre les doublons)
                 const allSigned = await signPacte(foundPacte.id, message.author.id);
+                
+                // Mettre à jour la mémoire seulement si la signature a réussi
+                if (!foundPacte.data.signatures.includes(message.author.id)) {
+                    foundPacte.data.signatures.push(message.author.id);
+                }
                 
                 await message.react('✅');
                 
@@ -66,6 +72,16 @@ module.exports = {
                 }
             } catch (error) {
                 logger.error('Error signing pacte:', error);
+                
+                // Si l'erreur indique que l'utilisateur a déjà signé
+                if (error.message.includes('déjà signé')) {
+                    await message.react('⚠️');
+                    return message.reply({
+                        content: '⚠️ Vous avez déjà signé ce pacte !',
+                        allowedMentions: { repliedUser: false }
+                    });
+                }
+                
                 await message.reply('❌ Erreur lors de la signature.');
             }
         }
