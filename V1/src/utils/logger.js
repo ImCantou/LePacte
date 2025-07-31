@@ -27,7 +27,7 @@ const filterPolling = winston.format((info) => {
 })();
 
 const logger = winston.createLogger({
-    level: process.env.LOG_LEVEL || 'info', // Configurable via .env
+    level: process.env.LOG_LEVEL || 'warn', // Plus restrictif par défaut
     format: winston.format.combine(
         filterPolling,
         winston.format.timestamp({
@@ -43,16 +43,16 @@ const logger = winston.createLogger({
         new winston.transports.File({ 
             filename: path.join(logDir, 'error.log'), 
             level: 'error',
-            maxsize: 10485760, // 10MB
-            maxFiles: 5,
+            maxsize: 5242880, // 5MB (réduit)
+            maxFiles: 3, // Moins de fichiers
             tailable: true
         }),
-        // Fichier pour les événements importants (pas le debug)
+        // Fichier pour les événements critiques uniquement
         new winston.transports.File({ 
-            filename: path.join(logDir, 'combined.log'),
-            level: 'info', // Ne log que info, warn, error
-            maxsize: 20971520, // 20MB
-            maxFiles: 7,
+            filename: path.join(logDir, 'important.log'),
+            level: 'warn', // Seulement warn et error
+            maxsize: 10485760, // 10MB (réduit)
+            maxFiles: 3, // Moins de fichiers
             tailable: true
         }),
         // Console pour le développement
@@ -61,7 +61,7 @@ const logger = winston.createLogger({
                 winston.format.colorize(),
                 winston.format.simple()
             ),
-            level: process.env.NODE_ENV === 'production' ? 'info' : 'debug'
+            level: process.env.NODE_ENV === 'production' ? 'warn' : 'info' // Moins verbeux
         })
     ]
 });
@@ -70,14 +70,14 @@ const logger = winston.createLogger({
 if (process.env.NODE_ENV === 'production') {
     const DailyRotateFile = require('winston-daily-rotate-file');
     
-    // Logs quotidiens avec rotation automatique
+    // Logs quotidiens avec rotation automatique - plus conservateur
     logger.add(new DailyRotateFile({
         filename: path.join(logDir, 'app-%DATE%.log'),
         datePattern: 'YYYY-MM-DD',
         zippedArchive: true,
-        maxSize: '20m',
-        maxFiles: '14d', // Garde seulement 14 jours
-        level: 'info'
+        maxSize: '5m', // Réduit de 20m à 5m
+        maxFiles: '7d', // Réduit de 14d à 7d
+        level: 'warn' // Seulement warn et error
     }));
 }
 

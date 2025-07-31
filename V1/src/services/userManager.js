@@ -40,32 +40,50 @@ async function updateUserPoints(discordId, pointsDelta) {
 async function createPacte(objective, participants, channelId) {
     const db = getDb();
     
-    // Check if any participant already has an active pacte
-    for (const discordId of participants) {
-        const activePacte = await getActiveUserPacte(discordId);
-        if (activePacte) {
-            throw new Error(`<@${discordId}> a déjà un pacte actif !`);
+    // Démarrer une transaction
+    await db.run('BEGIN TRANSACTION');
+    
+    try {
+        // Check if any participant already has an active pacte
+        for (const discordId of participants) {
+            const activePacte = await db.get(
+                `SELECT p.id FROM pactes p
+                 JOIN participants part ON p.id = part.pacte_id
+                 WHERE part.discord_id = ? AND p.status IN ('pending', 'active') AND part.left_at IS NULL`,
+                discordId
+            );
+            
+            if (activePacte) {
+                await db.run('ROLLBACK');
+                throw new Error(`<@${discordId}> a déjà un pacte actif !`);
+            }
         }
-    }
-    
-    // Create pacte
-    const result = await db.run(
-        'INSERT INTO pactes (objective, log_channel_id) VALUES (?, ?)',
-        [objective, channelId]
-    );
-    
-    const pacteId = result.lastID;
-    
-    // Add participants
-    for (const discordId of participants) {
-        await db.run(
-            'INSERT INTO participants (pacte_id, discord_id) VALUES (?, ?)',
-            [pacteId, discordId]
+        
+        // Create pacte
+        const result = await db.run(
+            'INSERT INTO pactes (objective, log_channel_id) VALUES (?, ?)',
+            [objective, channelId]
         );
+        
+        const pacteId = result.lastID;
+        
+        // Add participants
+        for (const discordId of participants) {
+            await db.run(
+                'INSERT INTO participants (pacte_id, discord_id) VALUES (?, ?)',
+                [pacteId, discordId]
+            );
+        }
+        
+        await db.run('COMMIT');
+        
+        logger.warn(`Pacte created: #${pacteId} with ${participants.length} participants`);
+        return pacteId;
+        
+    } catch (error) {
+        await db.run('ROLLBACK');
+        throw error;
     }
-    
-    logger.info(`Pacte created: #${pacteId} with ${participants.length} participants`);
-    return pacteId;
 }
 
 async function checkIfSigned(pacteId, discordId) {
@@ -80,38 +98,109 @@ async function checkIfSigned(pacteId, discordId) {
 async function signPacte(pacteId, discordId) {
     const db = getDb();
     
-    // Vérifier d'abord si déjà signé pour éviter les doublons
-    const alreadySigned = await checkIfSigned(pacteId, discordId);
-    if (alreadySigned) {
-        throw new Error('Utilisateur a déjà signé ce pacte');
-    }
+    // Démarrer une transaction pour éviter les conditions de course
+    await db.run('BEGIN TRANSACTION');
     
-    await db.run(
-        'UPDATE participants SET signed_at = CURRENT_TIMESTAMP WHERE pacte_id = ? AND discord_id = ? AND signed_at IS NULL',
-        [pacteId, discordId]
-    );
-    
-    // Check if all signed
-    const allParticipants = await db.get(
-        'SELECT COUNT(*) as total FROM participants WHERE pacte_id = ?',
-        pacteId
-    );
-    
-    const signedParticipants = await db.get(
-        'SELECT COUNT(*) as signed FROM participants WHERE pacte_id = ? AND signed_at IS NOT NULL',
-        pacteId
-    );
-    
-    if (signedParticipants.signed === allParticipants.total) {
-        // All signed, activate pacte
+    try {
+        // Vérifier d'abord si déjà signé (avec verrouillage)
+        const participant = await db.get(
+            'SELECT signed_at FROM participants WHERE pacte_id = ? AND discord_id = ?',
+            [pacteId, discordId]
+        );
+        
+        if (!participant) {
+            await db.run('ROLLBACK');
+            throw new Error('Vous n\'êtes pas participant de ce pacte');
+        }
+        
+        if (participant.signed_at !== null) {
+            await db.run('ROLLBACK');
+            throw new Error('Utilisateur a déjà signé ce pacte');
+        }
+        
+        // Marquer comme signé
         await db.run(
-            'UPDATE pactes SET status = "active", started_at = CURRENT_TIMESTAMP WHERE id = ?',
+            'UPDATE participants SET signed_at = CURRENT_TIMESTAMP WHERE pacte_id = ? AND discord_id = ? AND signed_at IS NULL',
+            [pacteId, discordId]
+        );
+        
+        // Vérifier si tous ont signé
+        const counts = await db.get(
+            `SELECT 
+                COUNT(*) as total,
+                COUNT(signed_at) as signed
+             FROM participants 
+             WHERE pacte_id = ? AND left_at IS NULL`,
             pacteId
         );
-        return true;
+        
+        let allSigned = false;
+        if (counts.signed === counts.total) {
+            // Tous ont signé, activer le pacte
+            await db.run(
+                'UPDATE pactes SET status = "active", started_at = CURRENT_TIMESTAMP WHERE id = ?',
+                pacteId
+            );
+            allSigned = true;
+        }
+        
+        // Récupérer les noms des participants pour les logs
+        const participantNames = await db.all(
+            `SELECT u.summoner_name 
+             FROM users u 
+             JOIN participants p ON u.discord_id = p.discord_id 
+             WHERE p.pacte_id = ? AND p.signed_at IS NOT NULL AND p.left_at IS NULL`,
+            pacteId
+        );
+        
+        await db.run('COMMIT');
+        
+        logger.warn(`Pacte #${pacteId}: ${discordId} a signé. Status: ${allSigned ? 'ACTIVÉ' : counts.signed + '/' + counts.total}`);
+        
+        return {
+            allSigned,
+            signedCount: counts.signed,
+            totalParticipants: counts.total,
+            participantNames: participantNames.map(p => p.summoner_name).join(', ')
+        };
+        
+    } catch (error) {
+        await db.run('ROLLBACK');
+        throw error;
     }
+}
+
+async function getPendingPactes(channelId) {
+    const db = getDb();
     
-    return false;
+    // Récupérer tous les pactes en attente dans ce canal
+    const pactes = await db.all(
+        `SELECT 
+            p.id, 
+            p.objective, 
+            p.status,
+            p.created_at,
+            GROUP_CONCAT(DISTINCT part.discord_id) as participants,
+            GROUP_CONCAT(CASE WHEN part.signed_at IS NOT NULL THEN part.discord_id END) as signed_participants
+         FROM pactes p
+         JOIN participants part ON p.id = part.pacte_id
+         WHERE p.log_channel_id = ? 
+           AND p.status = 'pending'
+           AND part.left_at IS NULL
+           AND datetime(p.created_at, '+5 minutes') > datetime('now')
+         GROUP BY p.id`,
+        channelId
+    );
+    
+    // Transformer en format utilisable
+    return pactes.map(pacte => ({
+        id: pacte.id,
+        objective: pacte.objective,
+        status: pacte.status,
+        created_at: pacte.created_at,
+        participants: pacte.participants ? pacte.participants.split(',') : [],
+        signed_participants: pacte.signed_participants ? pacte.signed_participants.split(',') : []
+    }));
 }
 
 async function getActivePactes() {
@@ -186,30 +275,67 @@ async function getPacteParticipants(pacteId) {
 async function leavePacte(pacteId, discordId, malus) {
     const db = getDb();
     
-    // Marquer comme parti
-    await db.run(
-        'UPDATE participants SET left_at = CURRENT_TIMESTAMP, points_gained = ? WHERE pacte_id = ? AND discord_id = ?',
-        [-malus, pacteId, discordId]
-    );
+    // Démarrer une transaction pour assurer la cohérence
+    await db.run('BEGIN TRANSACTION');
     
-    // Appliquer le malus
-    await updateUserPoints(discordId, -malus);
-    
-    // Vérifier s'il reste des participants actifs
-    const activeParticipants = await db.get(
-        'SELECT COUNT(*) as count FROM participants WHERE pacte_id = ? AND signed_at IS NOT NULL AND left_at IS NULL',
-        pacteId
-    );
-    
-    if (activeParticipants.count === 0) {
-        // Tous les participants sont partis, échec du pacte
+    try {
+        // Vérifier que l'utilisateur est bien dans le pacte et qu'il ne l'a pas déjà quitté
+        const participant = await db.get(
+            'SELECT * FROM participants WHERE pacte_id = ? AND discord_id = ? AND left_at IS NULL',
+            [pacteId, discordId]
+        );
+        
+        if (!participant) {
+            await db.run('ROLLBACK');
+            throw new Error('Vous n\'êtes pas dans ce pacte ou l\'avez déjà quitté');
+        }
+        
+        // Récupérer les infos du pacte pour les logs
+        const pacte = await db.get('SELECT * FROM pactes WHERE id = ?', pacteId);
+        const user = await db.get('SELECT summoner_name FROM users WHERE discord_id = ?', discordId);
+        
+        // Marquer comme parti
         await db.run(
-            'UPDATE pactes SET status = "failed", completed_at = CURRENT_TIMESTAMP WHERE id = ?',
+            'UPDATE participants SET left_at = CURRENT_TIMESTAMP, points_gained = ? WHERE pacte_id = ? AND discord_id = ?',
+            [-malus, pacteId, discordId]
+        );
+        
+        // Appliquer le malus
+        await updateUserPoints(discordId, -malus);
+        
+        // Vérifier s'il reste des participants actifs
+        const activeParticipants = await db.get(
+            'SELECT COUNT(*) as count FROM participants WHERE pacte_id = ? AND signed_at IS NOT NULL AND left_at IS NULL',
             pacteId
         );
+        
+        let pacteStatus = 'active';
+        if (activeParticipants.count === 0) {
+            // Tous les participants sont partis, échec du pacte
+            await db.run(
+                'UPDATE pactes SET status = "failed", completed_at = CURRENT_TIMESTAMP WHERE id = ?',
+                pacteId
+            );
+            pacteStatus = 'failed';
+        }
+        
+        await db.run('COMMIT');
+        
+        // Log important pour suivi
+        logger.warn(`ABANDON - Pacte #${pacteId}: ${user?.summoner_name || discordId} a quitté le pacte. Malus: -${malus} points. Pacte status: ${pacteStatus}. Participants restants: ${activeParticipants.count}`);
+        
+        return {
+            success: true,
+            pacteStatus,
+            remainingParticipants: activeParticipants.count,
+            userName: user?.summoner_name || 'Utilisateur inconnu'
+        };
+        
+    } catch (error) {
+        await db.run('ROLLBACK');
+        logger.error(`Erreur lors de l'abandon du pacte #${pacteId} par ${discordId}:`, error);
+        throw error;
     }
-    
-    logger.info(`User ${discordId} left pacte #${pacteId} with malus: -${malus}`);
 }
 
 async function getJoinablePacte(channelId) {
@@ -241,29 +367,59 @@ async function getAllJoinablePactes(channelId) {
 async function joinPacte(pacteId, discordId) {
     const db = getDb();
     
-    // Vérifier si déjà dans un pacte actif
-    const activePacte = await getActiveUserPacte(discordId);
-    if (activePacte) {
-        throw new Error('Vous avez déjà un pacte actif !');
+    // Démarrer une transaction
+    await db.run('BEGIN TRANSACTION');
+    
+    try {
+        // Vérifier si déjà dans un pacte actif
+        const activePacte = await db.get(
+            `SELECT p.id FROM pactes p
+             JOIN participants part ON p.id = part.pacte_id
+             WHERE part.discord_id = ? AND p.status IN ('pending', 'active') AND part.left_at IS NULL`,
+            discordId
+        );
+        
+        if (activePacte) {
+            await db.run('ROLLBACK');
+            throw new Error('Vous avez déjà un pacte actif !');
+        }
+        
+        // Vérifier si déjà dans ce pacte
+        const existing = await db.get(
+            'SELECT * FROM participants WHERE pacte_id = ? AND discord_id = ?',
+            [pacteId, discordId]
+        );
+        
+        if (existing) {
+            await db.run('ROLLBACK');
+            throw new Error('Vous êtes déjà dans ce pacte !');
+        }
+        
+        // Vérifier si le pacte peut encore accueillir des participants
+        const participantCount = await db.get(
+            'SELECT COUNT(*) as count FROM participants WHERE pacte_id = ? AND left_at IS NULL',
+            pacteId
+        );
+        
+        if (participantCount.count >= 5) {
+            await db.run('ROLLBACK');
+            throw new Error('Ce pacte est complet (5 participants maximum) !');
+        }
+        
+        // Ajouter comme participant
+        await db.run(
+            'INSERT INTO participants (pacte_id, discord_id) VALUES (?, ?)',
+            [pacteId, discordId]
+        );
+        
+        await db.run('COMMIT');
+        
+        logger.warn(`User ${discordId} joined pacte #${pacteId}`);
+        
+    } catch (error) {
+        await db.run('ROLLBACK');
+        throw error;
     }
-    
-    // Vérifier si déjà dans ce pacte
-    const existing = await db.get(
-        'SELECT * FROM participants WHERE pacte_id = ? AND discord_id = ?',
-        [pacteId, discordId]
-    );
-    
-    if (existing) {
-        throw new Error('Vous êtes déjà dans ce pacte !');
-    }
-    
-    // Ajouter comme participant
-    await db.run(
-        'INSERT INTO participants (pacte_id, discord_id) VALUES (?, ?)',
-        [pacteId, discordId]
-    );
-    
-    logger.info(`User ${discordId} joined pacte #${pacteId}`);
 }
 
 async function updateBestStreak(discordId, streak) {
@@ -277,7 +433,25 @@ async function updateBestStreak(discordId, streak) {
 async function resetMonthlyPoints() {
     const db = getDb();
     await db.run('UPDATE users SET points_monthly = 0');
-    logger.info('Monthly points reset');
+    logger.warn('Monthly points reset');
+}
+
+async function cleanupExpiredPactes() {
+    const db = getDb();
+    
+    // Marquer les pactes en attente expirés comme échoués
+    const result = await db.run(
+        `UPDATE pactes 
+         SET status = 'failed', completed_at = CURRENT_TIMESTAMP 
+         WHERE status = 'pending' 
+           AND datetime(created_at, '+5 minutes') <= datetime('now')`
+    );
+    
+    if (result.changes > 0) {
+        logger.warn(`Cleaned up ${result.changes} expired pactes`);
+    }
+    
+    return result.changes;
 }
 
 module.exports = {
@@ -288,6 +462,7 @@ module.exports = {
     createPacte,
     checkIfSigned,
     signPacte,
+    getPendingPactes,
     getActivePactes,
     getActiveUserPacte,
     updatePacteStatus,
@@ -298,5 +473,6 @@ module.exports = {
     getAllJoinablePactes,
     joinPacte,
     updateBestStreak,
-    resetMonthlyPoints
+    resetMonthlyPoints,
+    cleanupExpiredPactes
 };

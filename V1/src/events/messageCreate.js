@@ -1,4 +1,4 @@
-const { signPacte } = require('../services/userManager');
+const { signPacte, getPendingPactes } = require('../services/userManager');
 const logger = require('../utils/logger');
 
 module.exports = {
@@ -10,66 +10,60 @@ module.exports = {
         if (message.content.trim().toLowerCase() === 'je signe') {
             const client = message.client;
             
-            // Find pending pacte in this channel
-            let foundPacte = null;
-            for (const [pacteId, pacteData] of client.pendingPactes) {
-                if (pacteData.channelId === message.channel.id && 
-                    pacteData.participants.includes(message.author.id) &&
-                    Date.now() < pacteData.expires) {
-                    foundPacte = { id: pacteId, data: pacteData };
-                    break;
-                }
-            }
-            
-            if (!foundPacte) return;
-            
             try {
-                // Vérifier d'abord en base de données si déjà signé
-                const { checkIfSigned } = require('../services/userManager');
-                const alreadySigned = await checkIfSigned(foundPacte.id, message.author.id);
+                // Récupérer les pactes en attente depuis la DB (source de vérité)
+                const pendingPactes = await getPendingPactes(message.channel.id);
                 
-                if (alreadySigned) {
-                    await message.react('⚠️');
-                    return message.reply({
-                        content: '⚠️ Vous avez déjà signé ce pacte !',
-                        allowedMentions: { repliedUser: false }
-                    });
+                // Chercher un pacte que cet utilisateur peut signer
+                let foundPacte = null;
+                for (const pacte of pendingPactes) {
+                    // Vérifier si l'utilisateur est participant et n'a pas encore signé
+                    if (pacte.participants.includes(message.author.id) && 
+                        !pacte.signed_participants.includes(message.author.id)) {
+                        foundPacte = pacte;
+                        break;
+                    }
                 }
                 
-                // Tenter la signature en base (avec protection contre les doublons)
-                const allSigned = await signPacte(foundPacte.id, message.author.id);
-                
-                // Mettre à jour la mémoire seulement si la signature a réussi
-                if (!foundPacte.data.signatures.includes(message.author.id)) {
-                    foundPacte.data.signatures.push(message.author.id);
+                if (!foundPacte) {
+                    // Pas de pacte à signer pour cet utilisateur
+                    return;
                 }
+                
+                // Tenter la signature
+                const result = await signPacte(foundPacte.id, message.author.id);
                 
                 await message.react('✅');
                 
-                // Compter les signatures
-                const signatureCount = foundPacte.data.signatures.length;
-                const totalParticipants = foundPacte.data.participants.length;
-                
-                if (!allSigned) {
+                if (!result.allSigned) {
                     // Pas encore tous signés, afficher le progrès
                     await message.reply({
-                        content: `✅ **Signature confirmée !** (${signatureCount}/${totalParticipants})\n` +
-                                `En attente de ${totalParticipants - signatureCount} signature(s) supplémentaire(s).`,
+                        content: `✅ **Signature confirmée !** (${result.signedCount}/${result.totalParticipants})\n` +
+                                `En attente de ${result.totalParticipants - result.signedCount} signature(s) supplémentaire(s).`,
                         allowedMentions: { repliedUser: false }
                     });
-                }
-                
-                if (allSigned) {
-                    // All participants signed
-                    client.pendingPactes.delete(foundPacte.id);
+                } else {
+                    // Tous ont signé, pacte activé
                     
+                    // Nettoyer la mémoire
+                    if (client.pendingPactes) {
+                        client.pendingPactes.delete(foundPacte.id);
+                    }
+                    
+                    // Notification dans le canal de logs
                     const logChannel = message.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
-                    await logChannel.send({
-                        content: `⚔️ **PACTE ACTIVÉ** - Pacte #${foundPacte.id}\nQue la quête commence ! Objectif : ${foundPacte.data.objective} victoires consécutives.`
-                    });
+                    if (logChannel) {
+                        await logChannel.send({
+                            content: `⚔️ **PACTE ACTIVÉ** - Pacte #${foundPacte.id}\n` +
+                                    `🎯 Objectif : ${foundPacte.objective} victoires consécutives\n` +
+                                    `👥 Participants : ${result.participantNames || result.totalParticipants + ' joueurs'}\n` +
+                                    `Que la quête commence !`
+                        });
+                    }
                     
                     await message.channel.send('✨ **Pacte scellé !** Que l\'Abîme Hurlant guide vos pas vers la victoire !');
                 }
+                
             } catch (error) {
                 logger.error('Error signing pacte:', error);
                 
@@ -82,7 +76,10 @@ module.exports = {
                     });
                 }
                 
-                await message.reply('❌ Erreur lors de la signature.');
+                await message.reply({
+                    content: '❌ Erreur lors de la signature. Veuillez réessayer.',
+                    allowedMentions: { repliedUser: false }
+                });
             }
         }
     }

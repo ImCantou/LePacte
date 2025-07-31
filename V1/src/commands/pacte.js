@@ -138,22 +138,8 @@ async function handleCreatePacte(interaction) {
 
         await interaction.reply({ embeds: [rulesEmbed] });
         
-        // Store pacte context for signature collection
-        interaction.client.pendingPactes.set(pacteId, {
-            channelId: interaction.channelId,
-            participants: participants,
-            signatures: [],
-            objective: objective,
-            expires: Date.now() + 300000 // 5 minutes
-        });
-        
-        // Set timeout to clean up if not signed
-        setTimeout(() => {
-            if (interaction.client.pendingPactes.has(pacteId)) {
-                interaction.client.pendingPactes.delete(pacteId);
-                interaction.followUp('⏰ Le délai de signature a expiré. Le pacte est annulé.');
-            }
-        }, 300000);
+        // Note: Plus besoin de timeout ici car nous utilisons la DB comme source de vérité
+        // Le système d'expiration est géré dans getPendingPactes() via une requête SQL
         
     } catch (error) {
         await interaction.reply({
@@ -221,18 +207,36 @@ async function handleLeavePacte(interaction) {
     const collector = interaction.channel.createMessageCollector({ filter, time: 30000, max: 1 });
     
     collector.on('collect', async () => {
-        const { leavePacte } = require('../services/userManager');
-        await leavePacte(activePacte.id, interaction.user.id, malus);
-        
-        await interaction.followUp({
-            content: `💔 Vous avez quitté le pacte. -${malus} points.`,
-            ephemeral: true
-        });
-        
-        // Notifier dans le canal de logs
-        const logChannel = interaction.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
-        if (logChannel) {
-            await logChannel.send(`⚠️ <@${interaction.user.id}> a abandonné le pacte #${activePacte.id}. Malus: -${malus} points.`);
+        try {
+            const { leavePacte } = require('../services/userManager');
+            const result = await leavePacte(activePacte.id, interaction.user.id, malus);
+            
+            await interaction.followUp({
+                content: `💔 **Vous avez quitté le pacte #${activePacte.id}**\n` +
+                        `Malus appliqué : -${malus} points\n` +
+                        `Participants restants : ${result.remainingParticipants}`,
+                ephemeral: true
+            });
+            
+            // Notifier dans le canal de logs
+            const logChannel = interaction.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
+            if (logChannel) {
+                const statusText = result.pacteStatus === 'failed' ? '💀 **PACTE ÉCHOUÉ**' : '⚠️ **ABANDON**';
+                await logChannel.send(
+                    `${statusText} - Pacte #${activePacte.id}\n` +
+                    `👤 **${result.userName}** a abandonné le pacte\n` +
+                    `💸 **Malus :** -${malus} points\n` +
+                    `👥 **Participants restants :** ${result.remainingParticipants}\n` +
+                    `📊 **Meilleure série atteinte :** ${activePacte.best_streak_reached}/${activePacte.objective}`
+                );
+            }
+            
+        } catch (error) {
+            logger.error('Error leaving pacte:', error);
+            await interaction.followUp({
+                content: `❌ Erreur lors de l'abandon : ${error.message}`,
+                ephemeral: true
+            });
         }
     });
     
@@ -276,12 +280,6 @@ async function handleJoinPacte(interaction) {
                         `👥 **Participants :** ${pacte.participant_count + 1}/5\n\n` +
                         '✍️ Écrivez **"Je signe"** pour valider votre participation.'
             });
-            
-            // Ajouter aux participants en attente de signature
-            if (interaction.client.pendingPactes.has(pacte.id)) {
-                const pacteData = interaction.client.pendingPactes.get(pacte.id);
-                pacteData.participants.push(interaction.user.id);
-            }
             
         } catch (error) {
             await interaction.reply({
@@ -346,12 +344,6 @@ async function handleJoinPacte(interaction) {
                     embeds: [],
                     components: []
                 });
-                
-                // Ajouter aux participants en attente de signature
-                if (interaction.client.pendingPactes.has(selectedPacteId)) {
-                    const pacteData = interaction.client.pendingPactes.get(selectedPacteId);
-                    pacteData.participants.push(interaction.user.id);
-                }
                 
             } catch (error) {
                 await confirmation.update({

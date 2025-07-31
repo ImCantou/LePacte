@@ -1,5 +1,5 @@
 const { getDb } = require('./database');
-const { resetMonthlyPoints, completePacte } = require('../services/userManager');
+const { resetMonthlyPoints, completePacte, cleanupExpiredPactes } = require('../services/userManager');
 const { calculatePoints, calculateMalus } = require('../services/pointsCalculator');
 const { sendTimeWarningTaunt } = require('../services/pacteManager');
 const logger = require('./logger');
@@ -107,6 +107,7 @@ async function initScheduledTasks(client) {
     setInterval(async () => {
         await checkExpiredPactes(client);
         await sendWarnings(client);
+        await cleanupExpiredPactes(); // Nettoyer les pactes en attente expirés
     }, 5 * 60 * 1000);
     
     // Vérifier la réinitialisation mensuelle toutes les heures
@@ -117,8 +118,9 @@ async function initScheduledTasks(client) {
     // Vérifier immédiatement au démarrage
     await checkExpiredPactes(client);
     await checkMonthlyReset();
+    await cleanupExpiredPactes(); // Nettoyer au démarrage
     
-    logger.info('Scheduled tasks initialized');
+    logger.warn('Scheduled tasks initialized');
 }
 
 module.exports = {

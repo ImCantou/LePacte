@@ -65,7 +65,13 @@ async function initDatabase() {
         );
 
         CREATE INDEX IF NOT EXISTS idx_pactes_status ON pactes(status);
+        CREATE INDEX IF NOT EXISTS idx_pactes_channel ON pactes(log_channel_id);
+        CREATE INDEX IF NOT EXISTS idx_pactes_created_at ON pactes(created_at);
         CREATE INDEX IF NOT EXISTS idx_users_points ON users(points_total);
+        CREATE INDEX IF NOT EXISTS idx_participants_pacte ON participants(pacte_id);
+        CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(discord_id);
+        CREATE INDEX IF NOT EXISTS idx_participants_signed ON participants(signed_at);
+        CREATE INDEX IF NOT EXISTS idx_participants_left ON participants(left_at);
         CREATE INDEX IF NOT EXISTS idx_monthly_history ON monthly_history(discord_id, month);
     `);
 
