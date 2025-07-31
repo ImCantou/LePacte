@@ -203,16 +203,20 @@ async function handleLeavePacte(interaction) {
     // Confirmation
     const confirmEmbed = new EmbedBuilder()
         .setColor(0xFF0000)
-        .setTitle('⚠️ Quitter le pacte ?')
-        .setDescription(`Êtes-vous sûr de vouloir abandonner le pacte #${activePacte.id} ?`)
+        .setTitle('⚔️ Rompre le Pacte Sacré ?')
+        .setDescription(`**Guerrier, réfléchissez bien...**\n\n` +
+                       `Vous vous apprêtez à trahir le **Pacte #${activePacte.id}** de l'Abîme Hurlant.\n` +
+                       `Cette action déshonorera votre nom et celui de vos ancêtres.`)
         .addFields(
-            { name: 'Malus', value: `-${malus} points`, inline: true },
-            { name: 'Meilleure série', value: `${activePacte.best_streak_reached}/${activePacte.objective}`, inline: true }
-        );
+            { name: '⚖️ Châtiment', value: `-${malus} points de pénitence`, inline: true },
+            { name: '🏆 Exploit perdu', value: `${activePacte.best_streak_reached}/${activePacte.objective} victoires`, inline: true },
+            { name: '💀 Conséquences', value: 'Déshonneur éternel', inline: true }
+        )
+        .setFooter({ text: 'Les anciens esprits vous observent...' });
     
     await interaction.reply({
         embeds: [confirmEmbed],
-        content: 'Répondez "ABANDON" pour confirmer (30 secondes)',
+        content: '🩸 **Écrivez "ABANDON" pour sceller votre trahison** (30 secondes)\n*Ou gardez le silence pour préserver votre honneur...*',
         ephemeral: true
     });
     
@@ -225,23 +229,46 @@ async function handleLeavePacte(interaction) {
             const result = await leavePacte(activePacte.id, interaction.user.id, malus);
             
             await interaction.followUp({
-                content: `💔 **Vous avez quitté le pacte #${activePacte.id}**\n` +
-                        `Malus appliqué : -${malus} points\n` +
-                        `Participants restants : ${result.remainingParticipants}`,
+                content: `⚔️ **Vous avez rompu le pacte sacré de l'Abîme Hurlant...**\n\n` +
+                        `💀 **Le déshonneur vous poursuit** - Votre réputation est ternie\n` +
+                        `⚖️ **Pénitence :** -${malus} points de châtiment\n` +
+                        `👥 **Compagnons abandonnés :** ${result.remainingParticipants} guerrier(s) restant(s)\n\n` +
+                        `*Les anciens esprits de l'Abîme se souviendront de votre trahison...*`,
                 ephemeral: true
             });
             
             // Notifier dans le canal de logs
             const logChannel = interaction.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
             if (logChannel) {
-                const statusText = result.pacteStatus === 'failed' ? '💀 **PACTE ÉCHOUÉ**' : '⚠️ **ABANDON**';
-                await logChannel.send(
-                    `${statusText} - Pacte #${activePacte.id}\n` +
-                    `👤 **${result.userName}** a abandonné le pacte\n` +
-                    `💸 **Malus :** -${malus} points\n` +
-                    `👥 **Participants restants :** ${result.remainingParticipants}\n` +
-                    `📊 **Meilleure série atteinte :** ${activePacte.best_streak_reached}/${activePacte.objective}`
-                );
+                let rpMessage;
+                
+                if (result.pacteStatus === 'failed') {
+                    // Tous ont abandonné - Pacte complètement échoué
+                    rpMessage = `🏴‍☠️ **LE PACTE SOMBRE S'EFFONDRE** - Pacte #${activePacte.id}\n\n` +
+                               `💀 **${result.userName}** a brisé les derniers liens sacrés\n` +
+                               `⚰️ **L'alliance est morte** - Plus aucun guerrier ne tient parole\n` +
+                               `🩸 **Châtiment divin :** -${malus} points de pénitence\n` +
+                               `📜 **Meilleure tentative :** ${activePacte.best_streak_reached}/${activePacte.objective} victoires\n\n` +
+                               `*L'Abîme Hurlant pleure cette trahison ultime...*`;
+                } else if (result.remainingParticipants === 1) {
+                    // Il ne reste qu'un seul guerrier
+                    rpMessage = `⚔️ **DÉSERTION DANS LES RANGS** - Pacte #${activePacte.id}\n\n` +
+                               `�️ **${result.userName}** a abandonné ses frères d'armes\n` +
+                               `� **Un seul guerrier** résiste encore à l'appel de l'Abîme\n` +
+                               `⚖️ **Prix de la lâcheté :** -${malus} points de déshonneur\n` +
+                               `� **Exploit perdu :** ${activePacte.best_streak_reached}/${activePacte.objective} victoires\n\n` +
+                               `*Le dernier champion devra-t-il combattre seul ?*`;
+                } else {
+                    // Abandon normal avec plusieurs participants restants
+                    rpMessage = `💔 **SERMENT BRISÉ** - Pacte #${activePacte.id}\n\n` +
+                               `⚔️ **${result.userName}** a renié son honneur\n` +
+                               `🛡️ **${result.remainingParticipants} guerriers** maintiennent encore l'alliance\n` +
+                               `⚖️ **Rétribution :** -${malus} points de châtiment\n` +
+                               `🏆 **Progression perdue :** ${activePacte.best_streak_reached}/${activePacte.objective} victoires\n\n` +
+                               `*Les fidèles continuent leur quête vers la gloire...*`;
+                }
+                
+                await logChannel.send(rpMessage);
             }
             
         } catch (error) {
@@ -255,7 +282,10 @@ async function handleLeavePacte(interaction) {
     
     collector.on('end', collected => {
         if (collected.size === 0) {
-            interaction.followUp({ content: 'Abandon annulé.', ephemeral: true });
+            interaction.followUp({ 
+                content: '🛡️ **Sagesse préservée !** Votre honneur demeure intact.\n*L\'Abîme approuve votre loyauté...*', 
+                ephemeral: true 
+            });
         }
     });
 }
