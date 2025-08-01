@@ -29,6 +29,7 @@ async function initDatabase() {
     await db.run('PRAGMA cache_size = 10000');
     await db.run('PRAGMA temp_store = memory');
 
+    // Create tables
     await db.exec(`
         CREATE TABLE IF NOT EXISTS users (
             discord_id TEXT PRIMARY KEY,
@@ -51,21 +52,20 @@ async function initDatabase() {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             started_at TIMESTAMP,
             completed_at TIMESTAMP,
-            log_channel_id TEXT NOT NULL,
+            log_channel_id TEXT,
             last_checked TIMESTAMP,
             warning_sent BOOLEAN DEFAULT 0,
             current_game_id TEXT
         );
 
-        -- Table des participants (CORRIGÉE - signed_at NULL par défaut)
         CREATE TABLE IF NOT EXISTS participants (
             pacte_id INTEGER,
             discord_id TEXT,
-            signed_at TIMESTAMP DEFAULT NULL,  -- Important: NULL par défaut
+            signed_at TIMESTAMP,
             left_at TIMESTAMP,
+            points_gained INTEGER DEFAULT 0,
             kicked_at TIMESTAMP,
             kick_reason TEXT,
-            points_gained INTEGER DEFAULT 0,
             PRIMARY KEY (pacte_id, discord_id),
             FOREIGN KEY (pacte_id) REFERENCES pactes(id) ON DELETE CASCADE,
             FOREIGN KEY (discord_id) REFERENCES users(discord_id) ON DELETE CASCADE
@@ -91,137 +91,111 @@ async function initDatabase() {
             FOREIGN KEY (pacte_id) REFERENCES pactes(id) ON DELETE CASCADE
         );
 
-        -- Index pour optimiser les requêtes
+        CREATE TABLE IF NOT EXISTS global_stats (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS game_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pacte_id INTEGER,
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ended_at TIMESTAMP,
+            result TEXT CHECK (result IN ('win', 'loss', 'ongoing')),
+            participants_count INTEGER,
+            FOREIGN KEY (pacte_id) REFERENCES pactes(id) ON DELETE CASCADE
+        );
+    `);
+
+    // Create indexes
+    await db.exec(`
         CREATE INDEX IF NOT EXISTS idx_pactes_status ON pactes(status);
         CREATE INDEX IF NOT EXISTS idx_pactes_channel ON pactes(log_channel_id);
         CREATE INDEX IF NOT EXISTS idx_pactes_created_at ON pactes(created_at);
+        CREATE INDEX IF NOT EXISTS idx_pactes_last_checked ON pactes(last_checked);
+        CREATE INDEX IF NOT EXISTS idx_pactes_in_game ON pactes(in_game);
+        CREATE INDEX IF NOT EXISTS idx_pactes_status_in_game ON pactes(status, in_game);
         CREATE INDEX IF NOT EXISTS idx_users_points ON users(points_total DESC);
         CREATE INDEX IF NOT EXISTS idx_users_monthly ON users(points_monthly DESC);
+        CREATE INDEX IF NOT EXISTS idx_users_streak ON users(best_streak_ever DESC);
+        CREATE INDEX IF NOT EXISTS idx_users_updated ON users(updated_at);
         CREATE INDEX IF NOT EXISTS idx_participants_pacte ON participants(pacte_id);
         CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(discord_id);
-        CREATE INDEX IF NOT EXISTS idx_participants_signed ON participants(pacte_id, signed_at);
+        CREATE INDEX IF NOT EXISTS idx_participants_signed ON participants(signed_at);
+        CREATE INDEX IF NOT EXISTS idx_participants_left ON participants(left_at);
+        CREATE INDEX IF NOT EXISTS idx_participants_kicked ON participants(kicked_at);
         CREATE INDEX IF NOT EXISTS idx_participants_active ON participants(pacte_id, left_at, kicked_at);
+        CREATE INDEX IF NOT EXISTS idx_monthly_history ON monthly_history(discord_id, month);
+        CREATE INDEX IF NOT EXISTS idx_game_history_match ON game_history(match_id);
         CREATE INDEX IF NOT EXISTS idx_game_history_pacte ON game_history(pacte_id);
-
-        -- Vue utile pour les requêtes fréquentes
-        CREATE VIEW IF NOT EXISTS active_pacte_participants AS
-        SELECT 
-            p.id as pacte_id,
-            p.objective,
-            p.status,
-            p.current_wins,
-            p.log_channel_id,
-            part.discord_id,
-            part.signed_at,
-            u.summoner_name,
-            u.riot_puuid
-        FROM pactes p
-        JOIN participants part ON p.id = part.pacte_id
-        JOIN users u ON part.discord_id = u.discord_id
-        WHERE p.status IN ('pending', 'active')
-            AND part.left_at IS NULL 
-            AND part.kicked_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_game_history_processed ON game_history(processed_at);
+        CREATE INDEX IF NOT EXISTS idx_game_history_result ON game_history(result);
+        CREATE INDEX IF NOT EXISTS idx_global_stats_key ON global_stats(key);
+        CREATE INDEX IF NOT EXISTS idx_game_sessions_pacte ON game_sessions(pacte_id);
+        CREATE INDEX IF NOT EXISTS idx_game_sessions_result ON game_sessions(result);
     `);
 
-    // Triggers pour mettre à jour automatiquement les timestamps
-    await db.exec(`
-        -- Trigger pour mettre à jour updated_at sur users
-        CREATE TRIGGER IF NOT EXISTS update_users_timestamp 
-        AFTER UPDATE ON users
-        FOR EACH ROW
-        BEGIN
-            UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE discord_id = NEW.discord_id;
-        END;
-
-        -- Trigger pour mettre à jour updated_at sur global_stats
-        CREATE TRIGGER IF NOT EXISTS update_global_stats_timestamp 
-        AFTER UPDATE ON global_stats
-        FOR EACH ROW
-        BEGIN
-            UPDATE global_stats SET updated_at = CURRENT_TIMESTAMP WHERE key = NEW.key;
-        END;
-
-        -- Trigger pour calculer automatiquement les points lors de la complétion d'un pacte
-        CREATE TRIGGER IF NOT EXISTS update_pacte_completion_timestamp 
-        AFTER UPDATE OF status ON pactes
-        FOR EACH ROW
-        WHEN NEW.status IN ('success', 'failed') AND OLD.status NOT IN ('success', 'failed')
-        BEGIN
-            UPDATE pactes SET completed_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
-        END;
-    `);
-
-    // Migrations pour ajouter les nouvelles colonnes si elles n'existent pas
+    // Migrations pour les colonnes manquantes
     const migrations = [
         {
-            table: 'users',
-            column: 'created_at',
-            definition: 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+            check: "SELECT COUNT(*) as count FROM pragma_table_info('users') WHERE name='created_at'",
+            sql: "ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
         },
         {
-            table: 'users',
-            column: 'updated_at',
-            definition: 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+            check: "SELECT COUNT(*) as count FROM pragma_table_info('users') WHERE name='updated_at'",
+            sql: "ALTER TABLE users ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
         },
         {
-            table: 'pactes',
-            column: 'warning_sent',
-            definition: 'BOOLEAN DEFAULT 0'
+            check: "SELECT COUNT(*) as count FROM pragma_table_info('pactes') WHERE name='warning_sent'",
+            sql: "ALTER TABLE pactes ADD COLUMN warning_sent BOOLEAN DEFAULT 0"
         },
         {
-            table: 'pactes',
-            column: 'current_game_id',
-            definition: 'TEXT'
+            check: "SELECT COUNT(*) as count FROM pragma_table_info('pactes') WHERE name='current_game_id'",
+            sql: "ALTER TABLE pactes ADD COLUMN current_game_id TEXT"
         },
         {
-            table: 'game_history',
-            column: 'game_duration',
-            definition: 'INTEGER'
+            check: "SELECT COUNT(*) as count FROM pragma_table_info('game_history') WHERE name='game_duration'",
+            sql: "ALTER TABLE game_history ADD COLUMN game_duration INTEGER"
         },
         {
-            table: 'game_history',
-            column: 'game_end_timestamp',
-            definition: 'BIGINT'
+            check: "SELECT COUNT(*) as count FROM pragma_table_info('game_history') WHERE name='game_end_timestamp'",
+            sql: "ALTER TABLE game_history ADD COLUMN game_end_timestamp BIGINT"
         }
     ];
 
     for (const migration of migrations) {
         try {
-            await db.run(`ALTER TABLE ${migration.table} ADD COLUMN ${migration.column} ${migration.definition}`);
-            logger.info(`Added ${migration.column} column to ${migration.table} table`);
+            const result = await db.get(migration.check);
+            if (result.count === 0) {
+                await db.run(migration.sql);
+                logger.info(`Migration executed: ${migration.sql.substring(0, 50)}...`);
+            }
         } catch (error) {
-            // La colonne existe déjà ou autre erreur - ignorer
+            // Ignorer si la colonne existe déjà
         }
     }
 
-    // Initialiser les statistiques globales si elles n'existent pas
-    await initGlobalStats();
+    // Initialiser les stats globales
+    const defaultStats = [
+        ['total_pactes_created', '0'],
+        ['total_pactes_completed', '0'],
+        ['total_pactes_successful', '0'],
+        ['total_games_tracked', '0'],
+        ['total_users_registered', '0'],
+        ['server_start_time', new Date().toISOString()],
+        ['last_monthly_reset', new Date().toISOString().slice(0, 7)]
+    ];
+
+    for (const [key, value] of defaultStats) {
+        await db.run(
+            'INSERT OR IGNORE INTO global_stats (key, value) VALUES (?, ?)',
+            [key, value]
+        ).catch(() => {}); // Ignorer les erreurs si la clé existe déjà
+    }
 
     logger.info('Database initialized successfully');
     return db;
-}
-
-async function initGlobalStats() {
-    const stats = [
-        { key: 'total_pactes_created', value: '0' },
-        { key: 'total_pactes_completed', value: '0' },
-        { key: 'total_pactes_successful', value: '0' },
-        { key: 'total_games_tracked', value: '0' },
-        { key: 'total_users_registered', value: '0' },
-        { key: 'server_start_time', value: new Date().toISOString() },
-        { key: 'last_monthly_reset', value: new Date().toISOString().slice(0, 7) }, // YYYY-MM
-    ];
-
-    for (const stat of stats) {
-        try {
-            await db.run(
-                'INSERT OR IGNORE INTO global_stats (key, value) VALUES (?, ?)',
-                [stat.key, stat.value]
-            );
-        } catch (error) {
-            logger.error(`Error initializing global stat ${stat.key}:`, error);
-        }
-    }
 }
 
 function getDb() {
@@ -239,7 +213,7 @@ async function closeDatabase() {
     }
 }
 
-// Fonctions utilitaires pour les statistiques
+// Fonctions utilitaires
 async function updateGlobalStat(key, value) {
     if (!db) return;
     try {
@@ -274,24 +248,15 @@ async function incrementGlobalStat(key, increment = 1) {
     }
 }
 
-// Fonction de maintenance de la base de données
 async function runMaintenance() {
     if (!db) return;
     
     try {
         logger.info('Running database maintenance...');
         
-        // Nettoyer les anciennes sessions de jeu
-        await db.run(
-            'DELETE FROM game_sessions WHERE ended_at < datetime("now", "-7 days")'
-        );
+        await db.run('DELETE FROM game_sessions WHERE ended_at < datetime("now", "-7 days")');
+        await db.run('DELETE FROM game_history WHERE processed_at < datetime("now", "-30 days")');
         
-        // Nettoyer les vieux logs de game_history (garder 30 jours)
-        await db.run(
-            'DELETE FROM game_history WHERE processed_at < datetime("now", "-30 days")'
-        );
-        
-        // Optimiser la base de données
         await db.run('VACUUM');
         await db.run('ANALYZE');
         
@@ -301,14 +266,12 @@ async function runMaintenance() {
     }
 }
 
-// Fonction pour obtenir des statistiques de santé de la DB
 async function getDatabaseStats() {
     if (!db) return null;
     
     try {
         const stats = {};
         
-        // Compter les tables principales
         const tables = ['users', 'pactes', 'participants', 'game_history', 'monthly_history'];
         
         for (const table of tables) {
@@ -316,7 +279,6 @@ async function getDatabaseStats() {
             stats[table] = result.count;
         }
         
-        // Statistiques sur les pactes
         const pacteStats = await db.all(`
             SELECT status, COUNT(*) as count 
             FROM pactes 
@@ -328,7 +290,6 @@ async function getDatabaseStats() {
             stats.pactes_by_status[stat.status] = stat.count;
         });
         
-        // Taille de la base de données
         const dbStats = await db.get("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()");
         stats.database_size_bytes = dbStats.size;
         stats.database_size_mb = Math.round(dbStats.size / 1024 / 1024 * 100) / 100;
