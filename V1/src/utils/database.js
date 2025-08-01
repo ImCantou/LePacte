@@ -106,6 +106,11 @@ async function initDatabase() {
             participants_count INTEGER,
             FOREIGN KEY (pacte_id) REFERENCES pactes(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS config (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
     `);
 
     // Create indexes
