@@ -38,24 +38,38 @@ async function startPolling(client) {
 
 async function checkAllPactes(client) {
     try {
-        // Optimisation : ne vérifier que les pactes qui ont besoin
-        const pactes = await getPactesToCheck(1); // Check toutes les minutes minimum
+        // Utiliser la fonction optimisée qui ne récupère que les pactes à vérifier
+        const pactes = await getPactesToCheck(0.5); // Check toutes les 30 secondes minimum
         
         if (pactes.length > 0) {
-            // Log conditionnel pour éviter le spam
-            if (pollingCounter % 6 === 0) { // Log toutes les minutes
-                logger.info(`Polling: ${pactes.length} active pacte(s)`);
-            }
+            // Log seulement s'il y a des pactes à traiter
+            logger.debug(`Polling: checking ${pactes.length} active pacte(s)`);
             
             for (const pacte of pactes) {
-                await checkPacteProgress(pacte, client);
-                await updatePacteLastChecked(pacte.id);
+                try {
+                    await checkPacteProgress(pacte, client);
+                    // Mise à jour du last_checked après chaque vérification réussie
+                    await updatePacteLastChecked(pacte.id);
+                } catch (error) {
+                    logger.error(`Error checking pacte #${pacte.id}:`, error);
+                    // Continue avec les autres pactes même si un échoue
+                }
             }
         }
         
         pollingCounter++;
+        
+        // Log de santé toutes les 5 minutes
+        if (pollingCounter % 30 === 0) {
+            const db = getDb();
+            const stats = await db.get(
+                'SELECT COUNT(*) as count FROM pactes WHERE status = "active"'
+            );
+            logger.info(`Polling health: ${stats.count} active pactes total`);
+        }
+        
     } catch (error) {
-        logger.error('Error in polling loop:', error);
+        logger.error('Critical error in polling loop:', error);
     }
 }
 
