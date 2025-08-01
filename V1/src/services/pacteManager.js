@@ -108,20 +108,17 @@ async function checkPacteProgress(pacte, client) {
         
         // Étape 2 : Si on était en game, chercher le résultat
         if (pacte.in_game) {
-            // Délai progressif : plus on attend, plus on augmente le délai
-            const lastChecked = new Date(pacte.last_checked || pacte.created_at);
-            const timeSinceLastCheck = Date.now() - lastChecked.getTime();
-            
-            // Délai adaptatif : 30s puis 1min puis 2min puis 5min
-            const minWaitTime = timeSinceLastCheck < 120000 ? 30000 : 
-                              timeSinceLastCheck < 300000 ? 60000 : 
-                              timeSinceLastCheck < 600000 ? 120000 : 300000;
-            
-            if (timeSinceLastCheck < minWaitTime) {
-                return;
+            // Attendre 45 secondes après la fin de partie avant de chercher le résultat
+            // (le temps que l'API Riot se mette à jour)
+            const MATCH_RESULT_DELAY = 45000; // 45 secondes
+            const lastGameEnd = new Date(pacte.last_checked || Date.now());
+            const timeSinceGameEnd = Date.now() - lastGameEnd.getTime();
+
+            if (timeSinceGameEnd < MATCH_RESULT_DELAY) {
+                return; // Attendre encore
             }
-            
-            logger.debug(`Checking game result for pacte #${pacte.id} (waited ${Math.floor(timeSinceLastCheck/1000)}s)`);
+
+            logger.debug(`Checking game result for pacte #${pacte.id} (${Math.floor(timeSinceGameEnd/1000)}s since game end)`);
             
             // Chercher le résultat de la dernière game
             const puuids = participants.map(p => p.riot_puuid);

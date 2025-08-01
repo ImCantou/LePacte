@@ -203,8 +203,11 @@ function checkParticipantsInMatch(matchDetails, puuids) {
     const result = {
         allInGame: true,
         won: false,
-        participants: []
+        participants: [],
+        allSameTeam: true
     };
+    
+    let firstTeamId = null;
     
     for (const puuid of puuids) {
         const participant = gameParticipants.find(p => p.puuid === puuid);
@@ -212,6 +215,16 @@ function checkParticipantsInMatch(matchDetails, puuids) {
             result.allInGame = false;
             break;
         }
+        
+        // Vérifier que tous sont dans la même équipe
+        if (firstTeamId === null) {
+            firstTeamId = participant.teamId;
+        } else if (participant.teamId !== firstTeamId) {
+            result.allSameTeam = false;
+            result.allInGame = false; // Ne pas compter si pas même équipe
+            break;
+        }
+        
         result.participants.push(participant);
         result.won = participant.win;
     }
