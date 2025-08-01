@@ -197,26 +197,20 @@ async function handleLeavePacte(interaction) {
         });
     }
     
-    // Calculer le malus
     const malus = calculateMalus(activePacte.objective, activePacte.best_streak_reached);
     
-    // Confirmation
     const confirmEmbed = new EmbedBuilder()
         .setColor(0xFF0000)
-        .setTitle('⚔️ Rompre le Pacte Sacré ?')
-        .setDescription(`**Guerrier, réfléchissez bien...**\n\n` +
-                       `Vous vous apprêtez à trahir le **Pacte #${activePacte.id}** de l'Abîme Hurlant.\n` +
-                       `Cette action déshonorera votre nom et celui de vos ancêtres.`)
+        .setTitle('⚔️ Rompre le Pacte ?')
+        .setDescription(`Vous allez quitter le **Pacte #${activePacte.id}**`)
         .addFields(
-            { name: '⚖️ Châtiment', value: `-${malus} points de pénitence`, inline: true },
-            { name: '🏆 Exploit perdu', value: `${activePacte.best_streak_reached}/${activePacte.objective} victoires`, inline: true },
-            { name: '💀 Conséquences', value: 'Déshonneur éternel', inline: true }
-        )
-        .setFooter({ text: 'Les anciens esprits vous observent...' });
+            { name: '⚖️ Malus', value: `-${malus} points`, inline: true },
+            { name: '🏆 Progression', value: `${activePacte.best_streak_reached}/${activePacte.objective}`, inline: true }
+        );
     
     await interaction.reply({
         embeds: [confirmEmbed],
-        content: '🩸 **Écrivez "ABANDON" pour sceller votre trahison** (30 secondes)\n*Ou gardez le silence pour préserver votre honneur...*',
+        content: 'Écrivez **"ABANDON"** pour confirmer (30 secondes)',
         ephemeral: true
     });
     
@@ -229,52 +223,25 @@ async function handleLeavePacte(interaction) {
             const result = await leavePacte(activePacte.id, interaction.user.id, malus);
             
             await interaction.followUp({
-                content: `⚔️ **Vous avez rompu le pacte sacré de l'Abîme Hurlant...**\n\n` +
-                        `💀 **Le déshonneur vous poursuit** - Votre réputation est ternie\n` +
-                        `⚖️ **Pénitence :** -${malus} points de châtiment\n` +
-                        `👥 **Compagnons abandonnés :** ${result.remainingParticipants} guerrier(s) restant(s)\n\n` +
-                        `*Les anciens esprits de l'Abîme se souviendront de votre trahison...*`,
+                content: `💀 Vous avez quitté le pacte. **-${malus} points**`,
                 ephemeral: true
             });
             
-            // Notifier dans le canal de logs
+            // ENVOYER LE LOG
             const logChannel = interaction.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
             if (logChannel) {
-                let rpMessage;
-                
-                if (result.pacteStatus === 'failed') {
-                    // Tous ont abandonné - Pacte complètement échoué
-                    rpMessage = `🏴‍☠️ **LE PACTE SOMBRE S'EFFONDRE** - Pacte #${activePacte.id}\n\n` +
-                               `💀 **${result.userName}** a brisé les derniers liens sacrés\n` +
-                               `⚰️ **L'alliance est morte** - Plus aucun guerrier ne tient parole\n` +
-                               `🩸 **Châtiment divin :** -${malus} points de pénitence\n` +
-                               `📜 **Meilleure tentative :** ${activePacte.best_streak_reached}/${activePacte.objective} victoires\n\n` +
-                               `*L'Abîme Hurlant pleure cette trahison ultime...*`;
-                } else if (result.remainingParticipants === 1) {
-                    // Il ne reste qu'un seul guerrier
-                    rpMessage = `⚔️ **DÉSERTION DANS LES RANGS** - Pacte #${activePacte.id}\n\n` +
-                               `�️ **${result.userName}** a abandonné ses frères d'armes\n` +
-                               `� **Un seul guerrier** résiste encore à l'appel de l'Abîme\n` +
-                               `⚖️ **Prix de la lâcheté :** -${malus} points de déshonneur\n` +
-                               `� **Exploit perdu :** ${activePacte.best_streak_reached}/${activePacte.objective} victoires\n\n` +
-                               `*Le dernier champion devra-t-il combattre seul ?*`;
-                } else {
-                    // Abandon normal avec plusieurs participants restants
-                    rpMessage = `💔 **SERMENT BRISÉ** - Pacte #${activePacte.id}\n\n` +
-                               `⚔️ **${result.userName}** a renié son honneur\n` +
-                               `🛡️ **${result.remainingParticipants} guerriers** maintiennent encore l'alliance\n` +
-                               `⚖️ **Rétribution :** -${malus} points de châtiment\n` +
-                               `🏆 **Progression perdue :** ${activePacte.best_streak_reached}/${activePacte.objective} victoires\n\n` +
-                               `*Les fidèles continuent leur quête vers la gloire...*`;
-                }
-                
-                await logChannel.send(rpMessage);
+                await logChannel.send(
+                    `💔 **ABANDON** - Pacte #${activePacte.id}\n` +
+                    `${result.userName} a quitté le pacte\n` +
+                    `Malus : -${malus} points\n` +
+                    `Participants restants : ${result.remainingParticipants}`
+                );
             }
             
         } catch (error) {
             logger.error('Error leaving pacte:', error);
             await interaction.followUp({
-                content: `❌ Erreur lors de l'abandon : ${error.message}`,
+                content: `❌ Erreur : ${error.message}`,
                 ephemeral: true
             });
         }
@@ -283,7 +250,7 @@ async function handleLeavePacte(interaction) {
     collector.on('end', collected => {
         if (collected.size === 0) {
             interaction.followUp({ 
-                content: '🛡️ **Sagesse préservée !** Votre honneur demeure intact.\n*L\'Abîme approuve votre loyauté...*', 
+                content: '✅ Abandon annulé.', 
                 ephemeral: true 
             });
         }
@@ -611,5 +578,4 @@ async function handleKickPacte(interaction) {
         
         await interaction.followUp({ embeds: [resultEmbed] });
     });
-}
 }
