@@ -98,29 +98,24 @@ async function checkIfSigned(pacteId, discordId) {
 async function signPacte(pacteId, discordId) {
     const db = getDb();
     
-    // Démarrer une transaction pour éviter les conditions de course
-    await db.run('BEGIN TRANSACTION');
-    
     try {
-        // Vérifier d'abord si déjà signé (avec verrouillage)
+        // Vérifier si déjà signé
         const participant = await db.get(
             'SELECT signed_at FROM participants WHERE pacte_id = ? AND discord_id = ?',
             [pacteId, discordId]
         );
         
         if (!participant) {
-            await db.run('ROLLBACK');
             throw new Error('Vous n\'êtes pas participant de ce pacte');
         }
         
         if (participant.signed_at !== null) {
-            await db.run('ROLLBACK');
-            throw new Error('Utilisateur a déjà signé ce pacte');
+            throw new Error('Vous avez déjà signé ce pacte');
         }
         
-        // Marquer comme signé
+        // Signer
         await db.run(
-            'UPDATE participants SET signed_at = CURRENT_TIMESTAMP WHERE pacte_id = ? AND discord_id = ? AND signed_at IS NULL',
+            'UPDATE participants SET signed_at = CURRENT_TIMESTAMP WHERE pacte_id = ? AND discord_id = ?',
             [pacteId, discordId]
         );
         
@@ -130,13 +125,12 @@ async function signPacte(pacteId, discordId) {
                 COUNT(*) as total,
                 COUNT(signed_at) as signed
              FROM participants 
-             WHERE pacte_id = ? AND left_at IS NULL`,
+             WHERE pacte_id = ? AND left_at IS NULL AND kicked_at IS NULL`,
             pacteId
         );
         
         let allSigned = false;
         if (counts.signed === counts.total) {
-            // Tous ont signé, activer le pacte
             await db.run(
                 'UPDATE pactes SET status = "active", started_at = CURRENT_TIMESTAMP WHERE id = ?',
                 pacteId
@@ -144,29 +138,26 @@ async function signPacte(pacteId, discordId) {
             allSigned = true;
         }
         
-        // Récupérer les noms des participants pour les logs
+        // Récupérer les noms pour l'affichage
         const participantNames = await db.all(
             `SELECT u.summoner_name 
              FROM users u 
              JOIN participants p ON u.discord_id = p.discord_id 
-             WHERE p.pacte_id = ? AND p.signed_at IS NOT NULL AND p.left_at IS NULL`,
+             WHERE p.pacte_id = ? AND p.signed_at IS NOT NULL`,
             pacteId
         );
         
-        await db.run('COMMIT');
-        
-        logger.warn(`Pacte #${pacteId}: ${discordId} a signé. Status: ${allSigned ? 'ACTIVÉ' : counts.signed + '/' + counts.total}`);
+        logger.warn(`Pacte #${pacteId}: ${discordId} signed. ${counts.signed}/${counts.total}`);
         
         return {
             allSigned,
             signedCount: counts.signed,
             totalParticipants: counts.total,
-            participantNames: participantNames.map(p => p.summoner_name).join(', '),
-            isNewParticipant: participant.signed_at === null && counts.signed > 1 // Nouveau si pas déjà signé et pas le premier
+            participantNames: participantNames.map(p => p.summoner_name).join(', ')
         };
         
     } catch (error) {
-        await db.run('ROLLBACK');
+        logger.error(`Error signing pacte #${pacteId}:`, error);
         throw error;
     }
 }
