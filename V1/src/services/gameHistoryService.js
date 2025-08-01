@@ -154,9 +154,10 @@ async function updatePacteLastChecked(pacteId) {
  * @param {number} checkIntervalMinutes - Intervalle minimum entre les vérifications
  * @returns {Promise<Array>} - Liste des pactes à vérifier
  */
-async function getPactesToCheck(checkIntervalMinutes = 2) {
+async function getPactesToCheck(checkIntervalMinutes = 0.5) {
     const db = getDb();
     
+    // Prioriser les pactes in_game ou jamais vérifiés
     return await db.all(`
         SELECT p.*, GROUP_CONCAT(part.discord_id) as participants
         FROM pactes p
@@ -164,11 +165,16 @@ async function getPactesToCheck(checkIntervalMinutes = 2) {
         WHERE p.status = 'active'
         AND part.signed_at IS NOT NULL
         AND part.left_at IS NULL
+        AND part.kicked_at IS NULL
         AND (
-            p.last_checked IS NULL 
+            p.in_game = 1  -- Toujours vérifier si en game
+            OR p.last_checked IS NULL  -- Jamais vérifié
             OR datetime(p.last_checked, '+${checkIntervalMinutes} minutes') <= datetime('now')
         )
         GROUP BY p.id
+        ORDER BY 
+            p.in_game DESC,  -- Priorité aux parties en cours
+            p.last_checked ASC  -- Puis les plus anciens
     `);
 }
 

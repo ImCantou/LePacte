@@ -25,7 +25,7 @@ let pollingInterval;
 let pollingCounter = 0;
 
 async function startPolling(client) {
-    logger.warn('Starting pacte polling system...');
+    logger.info('Starting pacte polling system...');
     
     // Vérification initiale immédiate
     await checkAllPactes(client);
@@ -84,7 +84,7 @@ async function checkPacteProgress(pacte, client) {
         if (currentGame) {
             // Nouvelle game détectée
             if (!pacte.in_game) {
-                logger.warn(`ARAM detected for pacte #${pacte.id} - Game ID: ${currentGame}`);
+                logger.info(`ARAM detected for pacte #${pacte.id} - Game ID: ${currentGame}`);
                 await updatePacteStatus(pacte.id, { 
                     in_game: true,
                     current_game_id: currentGame,
@@ -139,7 +139,7 @@ async function checkPacteProgress(pacte, client) {
             } else {
                 // Pas de résultat après plusieurs minutes, reset avec avertissement
                 if (timeSinceLastCheck > 600000) { // 10 minutes
-                    logger.warn(`No result found for pacte #${pacte.id} after 10 minutes, resetting`);
+                    logger.info(`No result found for pacte #${pacte.id} after 10 minutes, resetting`);
                     
                     const channel = client.channels.cache.get(pacte.log_channel_id);
                     if (channel) {
@@ -195,7 +195,7 @@ async function checkPacteProgress(pacte, client) {
             const timeSinceLastCheck = Date.now() - lastChecked.getTime();
             
             if (timeSinceLastCheck > 900000) { // 15 minutes d'erreurs
-                logger.warn(`Resetting pacte #${pacte.id} due to persistent errors`);
+                logger.info(`Resetting pacte #${pacte.id} due to persistent errors`);
                 await updatePacteStatus(pacte.id, { 
                     in_game: false,
                     current_game_id: null 
@@ -240,6 +240,10 @@ async function processGameResult(pacte, gameResult, participants, client) {
     // Enregistrer le match comme traité
     await recordProcessedMatch(gameResult.matchId, pacte.id, gameResult.win ? 'win' : 'loss');
     
+    // Mettre à jour last_checked pour éviter de recheck trop vite
+    await updatePacteStatus(pacte.id, { 
+        last_checked: new Date().toISOString()
+    });
     // Calculer la durée de la partie pour contexte
     const gameDurationMin = Math.floor(gameResult.gameDuration / 60);
     
@@ -257,7 +261,7 @@ async function processGameResult(pacte, gameResult, participants, client) {
             const points = calculatePoints(pacte.objective, pacte.objective);
             await completePacte(pacte.id, true, points);
             
-            logger.warn(`PACTE SUCCESS #${pacte.id}: ${pacte.objective} wins achieved! +${points} points`);
+            logger.info(`PACTE SUCCESS #${pacte.id}: ${pacte.objective} wins achieved! +${points} points`);
             
             if (channel) {
                 const mentions = participants.map(p => `<@${p.discord_id}>`).join(' ');
@@ -348,7 +352,7 @@ async function handlePacteTimeout(pacte, participants, client) {
     
     await completePacte(pacte.id, false, totalPoints);
     
-    logger.warn(`PACTE TIMEOUT #${pacte.id}: Failed after 24h. Best: ${pacte.best_streak_reached}/${pacte.objective}. Points: ${totalPoints}`);
+    logger.info(`PACTE TIMEOUT #${pacte.id}: Failed after 24h. Best: ${pacte.best_streak_reached}/${pacte.objective}. Points: ${totalPoints}`);
     
     const channel = client.channels.cache.get(pacte.log_channel_id);
     if (channel) {
