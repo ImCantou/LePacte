@@ -170,6 +170,10 @@ async function initDatabase() {
         {
             check: "SELECT COUNT(*) as count FROM pactes WHERE in_game = 1 AND current_game_id IS NULL",
             sql: "UPDATE pactes SET in_game = 0 WHERE in_game = 1 AND current_game_id IS NULL"
+        },
+        {
+            check: "SELECT COUNT(*) as count FROM pragma_table_info('pactes') WHERE name='fetch_attempts'",
+            sql: "ALTER TABLE pactes ADD COLUMN fetch_attempts INTEGER DEFAULT 0"
         }
     ];
 

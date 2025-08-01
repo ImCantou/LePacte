@@ -42,7 +42,6 @@ async function checkAllPactes(client) {
         const pactes = await getPactesToCheck(0.5); // Check toutes les 30 secondes minimum
         
         if (pactes.length > 0) {
-            // Log seulement s'il y a des pactes à traiter
             logger.debug(`Polling: checking ${pactes.length} active pacte(s)`);
             
             for (const pacte of pactes) {
@@ -52,7 +51,6 @@ async function checkAllPactes(client) {
                     await updatePacteLastChecked(pacte.id);
                 } catch (error) {
                     logger.error(`Error checking pacte #${pacte.id}:`, error);
-                    // Continue avec les autres pactes même si un échoue
                 }
             }
         }
@@ -82,149 +80,102 @@ async function checkPacteProgress(pacte, client) {
         const currentGame = await checkIfInSameARAM(participants);
         
         if (currentGame) {
-            // Nouvelle game détectée
+            // Game en cours détectée
             if (!pacte.in_game) {
                 logger.info(`ARAM detected for pacte #${pacte.id} - Game ID: ${currentGame}`);
                 await updatePacteStatus(pacte.id, { 
                     in_game: true,
-                    current_game_id: currentGame,
-                    last_checked: new Date().toISOString()
+                    current_game_id: currentGame
                 });
                 
                 // Notification
+                const logChannel = client.channels.cache.get(process.env.LOG_CHANNEL_ID);
+                if (logChannel) {
+                    await logChannel.send(
+                        `🎮 **Partie détectée** - Pacte #${pacte.id} (${pacte.current_wins}/${pacte.objective})`
+                    );
+                }
+                
                 const channel = client.channels.cache.get(pacte.log_channel_id);
                 if (channel) {
                     const mentions = participants.map(p => `<@${p.discord_id}>`).join(' ');
                     await channel.send(
-                        `🎮 **PARTIE DÉTECTÉE !**\n` +
-                        `${mentions}\n` +
-                        `Pacte #${pacte.id} - ${pacte.current_wins}/${pacte.objective}\n` +
-                        `Bonne chance dans l'Abîme ! 🎯`
+                        `🎮 **GO !** ${mentions} - Bonne chance dans l'Abîme ! (${pacte.current_wins}/${pacte.objective}) 🎯`
                     );
                 }
             }
             return; // Attendre la fin de la game
         }
         
-        // Étape 2 : Si on était en game, chercher le résultat
+        // Étape 2 : Si on était en game mais plus maintenant, la partie est finie
         if (pacte.in_game) {
-            // Attendre 45 secondes après la fin de partie avant de chercher le résultat
-            // (le temps que l'API Riot se mette à jour)
-            const MATCH_RESULT_DELAY = 45000; // 45 secondes
-            const lastGameEnd = new Date(pacte.last_checked || Date.now());
-            const timeSinceGameEnd = Date.now() - lastGameEnd.getTime();
-
-            if (timeSinceGameEnd < MATCH_RESULT_DELAY) {
-                return; // Attendre encore
+            logger.info(`Game ended for pacte #${pacte.id}, fetching result...`);
+            
+            // Marquer comme plus en game
+            await updatePacteStatus(pacte.id, { 
+                in_game: false,
+                current_game_id: null
+            });
+            
+            // Attendre un peu que l'API se mette à jour (3 cycles de polling = 30 secondes)
+            if (!pacte.fetch_attempts) {
+                await updatePacteStatus(pacte.id, { fetch_attempts: 1 });
+                return;
             }
-
-            logger.debug(`Checking game result for pacte #${pacte.id} (${Math.floor(timeSinceGameEnd/1000)}s since game end)`);
             
-            // Chercher le résultat de la dernière game
-            const puuids = participants.map(p => p.riot_puuid);
-            const lastGame = await getLastValidGroupMatch(puuids, 5);
-            
-            if (lastGame) {
-                // Vérifier si déjà traité
-                const alreadyProcessed = await isMatchAlreadyProcessed(lastGame.matchId, pacte.id);
-                if (!alreadyProcessed) {
-                    await processGameResult(pacte, lastGame, participants, client);
+            if (pacte.fetch_attempts < 18) { // Essayer pendant 3 minutes
+                await updatePacteStatus(pacte.id, { 
+                    fetch_attempts: pacte.fetch_attempts + 1 
+                });
+                
+                // Essayer de récupérer le résultat
+                const puuids = participants.map(p => p.riot_puuid);
+                const lastGame = await getLastValidGroupMatch(puuids, 10);
+                
+                if (lastGame) {
+                    // Vérifier si ce n'est pas un match déjà traité
+                    const alreadyProcessed = await isMatchAlreadyProcessed(lastGame.matchId, pacte.id);
+                    if (!alreadyProcessed) {
+                        logger.info(`Found match result: ${lastGame.matchId} - ${lastGame.win ? 'WIN' : 'LOSS'}`);
+                        await processGameResult(pacte, lastGame, participants, client);
+                        
+                        // Reset fetch_attempts
+                        await updatePacteStatus(pacte.id, { fetch_attempts: 0 });
+                    } else {
+                        logger.debug(`Match ${lastGame.matchId} already processed, resetting state`);
+                        await updatePacteStatus(pacte.id, { fetch_attempts: 0 });
+                    }
                 } else {
-                    // Déjà traité, remettre in_game à false
-                    await updatePacteStatus(pacte.id, { 
-                        in_game: false,
-                        current_game_id: null 
-                    });
+                    logger.debug(`No result yet for pacte #${pacte.id}, attempt ${pacte.fetch_attempts}/18`);
                 }
             } else {
-                // Pas de résultat après plusieurs minutes, reset avec avertissement
-                if (timeSinceGameEnd > 600000) { // 10 minutes
-                    logger.info(`No result found for pacte #${pacte.id} after 10 minutes, resetting`);
-                    
-                    const channel = client.channels.cache.get(pacte.log_channel_id);
-                    if (channel) {
-                        await channel.send(
-                            `⚠️ **Impossible de détecter le résultat de votre dernière partie**\n` +
-                            `Pacte #${pacte.id} remis en attente.\n` +
-                            `*Si vous avez joué, merci de signaler le résultat manuellement.*`
-                        );
-                    }
-                    
-                    await updatePacteStatus(pacte.id, { 
-                        in_game: false,
-                        current_game_id: null 
-                    });
+                // Après 3 minutes, abandonner
+                logger.error(`Could not fetch result for pacte #${pacte.id} after 18 attempts`);
+                
+                const logChannel = client.channels.cache.get(process.env.LOG_CHANNEL_ID);
+                if (logChannel) {
+                    await logChannel.send(
+                        `⚠️ **Impossible de récupérer le résultat** - Pacte #${pacte.id}\n` +
+                        `Le suivi reprendra à la prochaine partie.`
+                    );
                 }
+                
+                // Reset
+                await updatePacteStatus(pacte.id, { fetch_attempts: 0 });
             }
         }
         
-        // Étape 3 : Vérifier si le pacte a expiré (24h)
+        // Étape 3 : Vérifier l'expiration du pacte (24h)
         const startTime = new Date(pacte.started_at || pacte.created_at).getTime();
         const hoursElapsed = (Date.now() - startTime) / 3600000;
         
         if (hoursElapsed >= 24) {
             logger.info(`Pacte #${pacte.id} has timed out after 24h`);
             await handlePacteTimeout(pacte, participants, client);
-            return;
-        }
-        
-        // Avertissement à 2h restantes si pas encore envoyé
-        if (!pacte.warning_sent && hoursElapsed >= 22) {
-            const channel = client.channels.cache.get(pacte.log_channel_id);
-            if (channel) {
-                const mentions = participants.map(p => `<@${p.discord_id}>`).join(' ');
-                await channel.send(
-                    `⏰ **DERNIÈRES HEURES !** ⏰\n\n` +
-                    `${mentions}\n\n` +
-                    `🔥 Plus que 2 heures pour réussir votre pacte #${pacte.id} !\n` +
-                    `📊 Progression : ${pacte.current_wins}/${pacte.objective}\n` +
-                    `🏆 Meilleure série : ${pacte.best_streak_reached}\n\n` +
-                    `*L'Abîme n'attend pas... Foncez !*`
-                );
-                
-                // Marquer l'avertissement comme envoyé
-                await updatePacteStatus(pacte.id, { warning_sent: true });
-            }
         }
         
     } catch (error) {
         logger.error(`Error checking pacte #${pacte.id}:`, error);
-        
-        // Incrémenter un compteur d'erreurs au lieu de se baser sur le temps
-        const db = getDb();
-        const errorCount = await db.get(
-            'SELECT error_count FROM pactes WHERE id = ?', 
-            pacte.id
-        );
-        
-        const newErrorCount = (errorCount?.error_count || 0) + 1;
-        
-        if (newErrorCount >= 5 && pacte.in_game) {
-            // Après 5 erreurs consécutives, reset mais notifier
-            logger.error(`Resetting pacte #${pacte.id} after ${newErrorCount} errors`);
-            
-            await updatePacteStatus(pacte.id, { 
-                in_game: false,
-                current_game_id: null,
-                error_count: 0
-            });
-            
-            // Notifier dans Discord
-            const channel = client.channels.cache.get(pacte.log_channel_id);
-            if (channel) {
-                await channel.send(
-                    `⚠️ **Erreur technique** - Pacte #${pacte.id}\n` +
-                    `Impossible de vérifier le résultat de votre partie.\n` +
-                    `Le suivi reprendra à votre prochaine partie.`
-                );
-            }
-        } else {
-            // Juste incrémenter le compteur
-            await db.run(
-                'UPDATE pactes SET error_count = ? WHERE id = ?',
-                [newErrorCount, pacte.id]
-            );
-        }
     }
 }
 
@@ -259,22 +210,30 @@ async function checkIfInSameARAM(participants) {
 
 async function processGameResult(pacte, gameResult, participants, client) {
     const channel = client.channels.cache.get(pacte.log_channel_id);
+    const logChannel = client.channels.cache.get(process.env.LOG_CHANNEL_ID);
     
     // Enregistrer le match comme traité
     await recordProcessedMatch(gameResult.matchId, pacte.id, gameResult.win ? 'win' : 'loss');
     
-    // Mettre à jour last_checked pour éviter de recheck trop vite
-    await updatePacteStatus(pacte.id, { 
-        last_checked: new Date().toISOString()
-    });
-    // Calculer la durée de la partie pour contexte
+    // Log détaillé
+    if (logChannel) {
+        const resultEmoji = gameResult.win ? '✅' : '❌';
+        await logChannel.send(
+            `${resultEmoji} **Résultat détecté** - Pacte #${pacte.id}\n` +
+            `Match ID: \`${gameResult.matchId}\`\n` +
+            `Durée: ${Math.floor(gameResult.gameDuration / 60)}min\n` +
+            `Progression: ${pacte.current_wins} → ${gameResult.win ? pacte.current_wins + 1 : 0}/${pacte.objective}`
+        );
+    }
+    
+    // Calculer la durée de la partie
     const gameDurationMin = Math.floor(gameResult.gameDuration / 60);
     
     if (gameResult.win) {
         // VICTOIRE
         const newWins = pacte.current_wins + 1;
         
-        // Mettre à jour les meilleures séries des joueurs
+        // Mettre à jour les meilleures séries
         for (const participant of participants) {
             await updateBestStreak(participant.discord_id, newWins);
         }
@@ -303,9 +262,7 @@ async function processGameResult(pacte, gameResult, participants, client) {
             // Continuer le pacte
             await updatePacteStatus(pacte.id, { 
                 current_wins: newWins,
-                best_streak_reached: Math.max(pacte.best_streak_reached, newWins),
-                in_game: false,
-                current_game_id: null
+                best_streak_reached: Math.max(pacte.best_streak_reached, newWins)
             });
             
             if (channel) {
@@ -331,15 +288,13 @@ async function processGameResult(pacte, gameResult, participants, client) {
         const hoursLeft = Math.floor(24 - hoursElapsed);
         
         if (hoursElapsed >= 24) {
-            // Temps écoulé - Pacte échoué
+            // Temps écoulé
             await handlePacteTimeout(pacte, participants, client);
         } else {
             // Reset mais le pacte continue
             await updatePacteStatus(pacte.id, { 
                 current_wins: 0,
-                best_streak_reached: bestStreak,
-                in_game: false,
-                current_game_id: null
+                best_streak_reached: bestStreak
             });
             
             if (channel) {
@@ -354,7 +309,7 @@ async function processGameResult(pacte, gameResult, participants, client) {
                 
                 await channel.send(message);
                 
-                // Message de motivation contextuel
+                // Message de motivation
                 if (hoursLeft > 2) {
                     setTimeout(async () => {
                         const motivationMsg = wasAtObjective ? 
@@ -397,7 +352,6 @@ async function sendRandomTaunt(pacte, channel, currentWins) {
     let tauntType = 'generic';
     let delay = 5000;
     
-    // Déterminer le type de taunt
     if (currentWins === 2) {
         shouldSendTaunt = true;
         tauntType = 'twoWins';
@@ -408,7 +362,7 @@ async function sendRandomTaunt(pacte, channel, currentWins) {
         shouldSendTaunt = true;
         tauntType = 'lastOne';
         delay = 2000;
-    } else if (Math.random() < 0.3) { // 30% de chance
+    } else if (Math.random() < 0.3) {
         shouldSendTaunt = true;
         tauntType = currentWins > pacte.objective / 2 ? 'victory' : 'generic';
     }
@@ -437,8 +391,7 @@ function getRandomTauntMessage(type, pacte, currentWins) {
                 "Les étoiles s'alignent ! ⭐",
                 "L'Abîme chante votre gloire ! 🎵",
                 "Un pas de plus vers la légende... 👑",
-                "Les anciens approuvent ! 🙏",
-                "La victoire a le goût de l'éternité ! ✨"
+                "Les anciens approuvent ! 🙏"
             ];
             return victoryTaunts[Math.floor(Math.random() * victoryTaunts.length)];
             
@@ -450,13 +403,6 @@ function getRandomTauntMessage(type, pacte, currentWins) {
                 "La gloire vous attend..."
             ];
             return genericTaunts[Math.floor(Math.random() * genericTaunts.length)];
-    }
-}
-
-async function sendTimeWarningTaunt(pacte, channel, hoursLeft) {
-    if (hoursLeft <= 1 && pacte.current_wins > 0) {
-        const taunt = `⏰ Plus que ${hoursLeft}h ! L'Abîme n'attend pas...`;
-        await channel.send(`🎭 *${taunt}*`);
     }
 }
 
@@ -472,6 +418,6 @@ module.exports = {
     startPolling,
     stopPolling,
     checkPacteProgress,
-    sendTimeWarningTaunt,
+    sendRandomTaunt,
     handlePacteTimeout
 };
