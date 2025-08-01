@@ -162,6 +162,10 @@ async function initDatabase() {
             check: "SELECT COUNT(*) as count FROM pragma_table_info('game_history') WHERE name='game_end_timestamp'",
             sql: "ALTER TABLE game_history ADD COLUMN game_end_timestamp BIGINT"
         },
+        {
+            check: "SELECT COUNT(*) as count FROM pragma_table_info('pactes') WHERE name='error_count'",
+            sql: "ALTER TABLE pactes ADD COLUMN error_count INTEGER DEFAULT 0"
+        },
         // Migration pour nettoyer les états incohérents
         {
             check: "SELECT COUNT(*) as count FROM pactes WHERE in_game = 1 AND current_game_id IS NULL",

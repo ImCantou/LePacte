@@ -138,7 +138,7 @@ async function checkPacteProgress(pacte, client) {
                 }
             } else {
                 // Pas de résultat après plusieurs minutes, reset avec avertissement
-                if (timeSinceLastCheck > 600000) { // 10 minutes
+                if (timeSinceGameEnd > 600000) { // 10 minutes
                     logger.info(`No result found for pacte #${pacte.id} after 10 minutes, resetting`);
                     
                     const channel = client.channels.cache.get(pacte.log_channel_id);
@@ -189,18 +189,41 @@ async function checkPacteProgress(pacte, client) {
         
     } catch (error) {
         logger.error(`Error checking pacte #${pacte.id}:`, error);
-        // En cas d'erreur répétée, reset le state pour éviter de bloquer
-        if (pacte.in_game) {
-            const lastChecked = new Date(pacte.last_checked || pacte.created_at);
-            const timeSinceLastCheck = Date.now() - lastChecked.getTime();
+        
+        // Incrémenter un compteur d'erreurs au lieu de se baser sur le temps
+        const db = getDb();
+        const errorCount = await db.get(
+            'SELECT error_count FROM pactes WHERE id = ?', 
+            pacte.id
+        );
+        
+        const newErrorCount = (errorCount?.error_count || 0) + 1;
+        
+        if (newErrorCount >= 5 && pacte.in_game) {
+            // Après 5 erreurs consécutives, reset mais notifier
+            logger.error(`Resetting pacte #${pacte.id} after ${newErrorCount} errors`);
             
-            if (timeSinceLastCheck > 900000) { // 15 minutes d'erreurs
-                logger.info(`Resetting pacte #${pacte.id} due to persistent errors`);
-                await updatePacteStatus(pacte.id, { 
-                    in_game: false,
-                    current_game_id: null 
-                });
+            await updatePacteStatus(pacte.id, { 
+                in_game: false,
+                current_game_id: null,
+                error_count: 0
+            });
+            
+            // Notifier dans Discord
+            const channel = client.channels.cache.get(pacte.log_channel_id);
+            if (channel) {
+                await channel.send(
+                    `⚠️ **Erreur technique** - Pacte #${pacte.id}\n` +
+                    `Impossible de vérifier le résultat de votre partie.\n` +
+                    `Le suivi reprendra à votre prochaine partie.`
+                );
             }
+        } else {
+            // Juste incrémenter le compteur
+            await db.run(
+                'UPDATE pactes SET error_count = ? WHERE id = ?',
+                [newErrorCount, pacte.id]
+            );
         }
     }
 }
