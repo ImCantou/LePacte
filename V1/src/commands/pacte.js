@@ -207,11 +207,22 @@ async function handleStatusPacte(interaction) {
 }
 
 async function handleLeavePacte(interaction) {
+    const db = getDb();
     const activePacte = await getActiveUserPacte(interaction.user.id);
     
     if (!activePacte) {
         return interaction.reply({
             content: '❌ Vous n\'avez pas de pacte actif.',
+            ephemeral: true
+        });
+    }
+    
+    // Vérifier si le pacte est en game
+    const pacteStatus = await db.get('SELECT in_game FROM pactes WHERE id = ?', activePacte.id);
+    if (pacteStatus.in_game) {
+        return interaction.reply({
+            content: '❌ **Impossible de quitter pendant une partie !**\n' +
+                    'Attendez la fin de la partie en cours pour quitter le pacte.',
             ephemeral: true
         });
     }
@@ -238,6 +249,16 @@ async function handleLeavePacte(interaction) {
     
     collector.on('collect', async () => {
         try {
+            // Double vérification au moment de l'abandon
+            const currentStatus = await db.get('SELECT in_game FROM pactes WHERE id = ?', activePacte.id);
+            if (currentStatus.in_game) {
+                await interaction.followUp({
+                    content: '❌ Une partie a commencé entre temps ! Abandon annulé.',
+                    ephemeral: true
+                });
+                return;
+            }
+            
             const { leavePacte } = require('../services/userManager');
             const result = await leavePacte(activePacte.id, interaction.user.id, malus);
             
@@ -286,6 +307,9 @@ async function handleJoinPacte(interaction) {
     }
     
     const { getAllJoinablePactes, joinPacte } = require('../services/userManager');
+    const db = getDb();
+    
+    // Récupérer les pactes joinables
     const joinablePactes = await getAllJoinablePactes(interaction.channelId);
     
     if (joinablePactes.length === 0) {
@@ -295,25 +319,42 @@ async function handleJoinPacte(interaction) {
         });
     }
     
-    if (joinablePactes.length === 1) {
-        // Un seul pacte disponible
-        const pacte = joinablePactes[0];
+    // Filtrer les pactes qui sont en game
+    const availablePactes = [];
+    for (const pacte of joinablePactes) {
+        const pacteStatus = await db.get('SELECT in_game FROM pactes WHERE id = ?', pacte.id);
+        if (!pacteStatus.in_game) {
+            availablePactes.push(pacte);
+        }
+    }
+    
+    if (availablePactes.length === 0) {
+        return interaction.reply({
+            content: '❌ Tous les pactes sont actuellement en partie. Attendez la fin des parties en cours.',
+            ephemeral: true
+        });
+    }
+    
+    if (availablePactes.length === 1) {
+        const pacte = availablePactes[0];
         try {
+            // Rejoindre en mode "pending signature"
             await joinPacte(pacte.id, interaction.user.id);
             
             await interaction.reply({
-                content: `✅ **Vous avez rejoint le pacte #${pacte.id} !**\n` +
+                content: `📜 **Vous êtes invité au Pacte #${pacte.id} !**\n` +
                         `🎯 Objectif : ${pacte.objective} victoires\n` +
                         `👥 Participants : ${pacte.participant_count + 1}/5\n\n` +
-                        `📝 **Écrivez "Je signe" pour valider votre participation**`
+                        `⚔️ **ÉCRIVEZ "Je signe" POUR SCELLER VOTRE ENGAGEMENT !**\n` +
+                        `*Sans signature, vous ne participez pas au pacte.*`
             });
             
             // Log
             const logChannel = interaction.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
             if (logChannel) {
                 await logChannel.send(
-                    `➕ **NOUVEAU PARTICIPANT** - Pacte #${pacte.id}\n` +
-                    `<@${interaction.user.id}> a rejoint le pacte (en attente de signature)`
+                    `📝 **INVITATION PACTE** - #${pacte.id}\n` +
+                    `<@${interaction.user.id}> invité (en attente de signature)`
                 );
             }
             
@@ -329,7 +370,7 @@ async function handleJoinPacte(interaction) {
             .setCustomId('select_pacte_join')
             .setPlaceholder('Choisissez un pacte...')
             .addOptions(
-                joinablePactes.map(pacte => ({
+                availablePactes.map(pacte => ({
                     label: `Pacte #${pacte.id}`,
                     description: `${pacte.objective} wins • ${pacte.participant_count}/5 joueurs`,
                     value: pacte.id.toString()
@@ -339,7 +380,7 @@ async function handleJoinPacte(interaction) {
         const row = new ActionRowBuilder().addComponents(selectMenu);
         
         await interaction.reply({
-            content: '🎯 Plusieurs pactes disponibles :',
+            content: '🎯 Pactes disponibles (non en partie) :',
             components: [row],
             ephemeral: true
         });
