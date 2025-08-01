@@ -452,23 +452,21 @@ async function cleanupExpiredPactes() {
 async function kickParticipant(pacteId, discordId, malus, reason) {
     const db = getDb();
     
-    await db.run('BEGIN TRANSACTION');
-    
     try {
-        // Marquer comme kicked
+        // Marquer comme exclu
         await db.run(
             `UPDATE participants 
              SET kicked_at = CURRENT_TIMESTAMP, 
-                 points_gained = ?, 
-                 kick_reason = ? 
+                 kick_reason = ?, 
+                 points_gained = ? 
              WHERE pacte_id = ? AND discord_id = ?`,
-            [-malus, reason, pacteId, discordId]
+            [reason, -malus, pacteId, discordId]
         );
         
         // Appliquer le malus
         await updateUserPoints(discordId, -malus);
         
-        // Vérifier s'il reste des participants
+        // Vérifier s'il reste des participants actifs
         const remaining = await db.get(
             `SELECT COUNT(*) as count 
              FROM participants 
@@ -479,6 +477,7 @@ async function kickParticipant(pacteId, discordId, malus, reason) {
             pacteId
         );
         
+        // Si plus personne, marquer le pacte comme échoué
         if (remaining.count === 0) {
             await db.run(
                 'UPDATE pactes SET status = "failed", completed_at = CURRENT_TIMESTAMP WHERE id = ?',
@@ -486,12 +485,15 @@ async function kickParticipant(pacteId, discordId, malus, reason) {
             );
         }
         
-        await db.run('COMMIT');
+        logger.warn(`Kick: User ${discordId} from pacte #${pacteId}. Malus: -${malus}`);
         
-        logger.warn(`User ${discordId} kicked from pacte #${pacteId}. Reason: ${reason}. Malus: -${malus}`);
+        return {
+            success: true,
+            remainingParticipants: remaining.count
+        };
         
     } catch (error) {
-        await db.run('ROLLBACK');
+        logger.error(`Error kicking participant:`, error);
         throw error;
     }
 }
@@ -525,6 +527,9 @@ module.exports = {
     getPacteParticipants,
     leavePacte,
     getJoinablePacte,
+    getAllJoinablePactes,
+    joinPacte,
+    updateBestStreak,
     resetMonthlyPoints,
     cleanupExpiredPactes,
     kickParticipant,

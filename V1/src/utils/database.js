@@ -51,20 +51,21 @@ async function initDatabase() {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             started_at TIMESTAMP,
             completed_at TIMESTAMP,
-            log_channel_id TEXT,
+            log_channel_id TEXT NOT NULL,
             last_checked TIMESTAMP,
             warning_sent BOOLEAN DEFAULT 0,
             current_game_id TEXT
         );
 
+        -- Table des participants (CORRIGÉE - signed_at NULL par défaut)
         CREATE TABLE IF NOT EXISTS participants (
             pacte_id INTEGER,
             discord_id TEXT,
-            signed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            signed_at TIMESTAMP DEFAULT NULL,  -- Important: NULL par défaut
             left_at TIMESTAMP,
-            points_gained INTEGER DEFAULT 0,
             kicked_at TIMESTAMP,
             kick_reason TEXT,
+            points_gained INTEGER DEFAULT 0,
             PRIMARY KEY (pacte_id, discord_id),
             FOREIGN KEY (pacte_id) REFERENCES pactes(id) ON DELETE CASCADE,
             FOREIGN KEY (discord_id) REFERENCES users(discord_id) ON DELETE CASCADE
@@ -90,49 +91,36 @@ async function initDatabase() {
             FOREIGN KEY (pacte_id) REFERENCES pactes(id) ON DELETE CASCADE
         );
 
-        -- Table pour les statistiques globales
-        CREATE TABLE IF NOT EXISTS global_stats (
-            key TEXT PRIMARY KEY,
-            value TEXT,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
-        -- Table pour les sessions de jeu (pour tracking avancé)
-        CREATE TABLE IF NOT EXISTS game_sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            pacte_id INTEGER,
-            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            ended_at TIMESTAMP,
-            result TEXT CHECK (result IN ('win', 'loss', 'ongoing')),
-            participants_count INTEGER,
-            FOREIGN KEY (pacte_id) REFERENCES pactes(id) ON DELETE CASCADE
-        );
-
         -- Index pour optimiser les requêtes
         CREATE INDEX IF NOT EXISTS idx_pactes_status ON pactes(status);
         CREATE INDEX IF NOT EXISTS idx_pactes_channel ON pactes(log_channel_id);
         CREATE INDEX IF NOT EXISTS idx_pactes_created_at ON pactes(created_at);
-        CREATE INDEX IF NOT EXISTS idx_pactes_last_checked ON pactes(last_checked);
-        CREATE INDEX IF NOT EXISTS idx_pactes_in_game ON pactes(in_game);
-        CREATE INDEX IF NOT EXISTS idx_pactes_status_in_game ON pactes(status, in_game);
         CREATE INDEX IF NOT EXISTS idx_users_points ON users(points_total DESC);
         CREATE INDEX IF NOT EXISTS idx_users_monthly ON users(points_monthly DESC);
-        CREATE INDEX IF NOT EXISTS idx_users_streak ON users(best_streak_ever DESC);
-        CREATE INDEX IF NOT EXISTS idx_users_updated ON users(updated_at);
         CREATE INDEX IF NOT EXISTS idx_participants_pacte ON participants(pacte_id);
         CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(discord_id);
-        CREATE INDEX IF NOT EXISTS idx_participants_signed ON participants(signed_at);
-        CREATE INDEX IF NOT EXISTS idx_participants_left ON participants(left_at);
-        CREATE INDEX IF NOT EXISTS idx_participants_kicked ON participants(kicked_at);
+        CREATE INDEX IF NOT EXISTS idx_participants_signed ON participants(pacte_id, signed_at);
         CREATE INDEX IF NOT EXISTS idx_participants_active ON participants(pacte_id, left_at, kicked_at);
-        CREATE INDEX IF NOT EXISTS idx_monthly_history ON monthly_history(discord_id, month);
-        CREATE INDEX IF NOT EXISTS idx_game_history_match ON game_history(match_id);
         CREATE INDEX IF NOT EXISTS idx_game_history_pacte ON game_history(pacte_id);
-        CREATE INDEX IF NOT EXISTS idx_game_history_processed ON game_history(processed_at);
-        CREATE INDEX IF NOT EXISTS idx_game_history_result ON game_history(result);
-        CREATE INDEX IF NOT EXISTS idx_global_stats_key ON global_stats(key);
-        CREATE INDEX IF NOT EXISTS idx_game_sessions_pacte ON game_sessions(pacte_id);
-        CREATE INDEX IF NOT EXISTS idx_game_sessions_result ON game_sessions(result);
+
+        -- Vue utile pour les requêtes fréquentes
+        CREATE VIEW IF NOT EXISTS active_pacte_participants AS
+        SELECT 
+            p.id as pacte_id,
+            p.objective,
+            p.status,
+            p.current_wins,
+            p.log_channel_id,
+            part.discord_id,
+            part.signed_at,
+            u.summoner_name,
+            u.riot_puuid
+        FROM pactes p
+        JOIN participants part ON p.id = part.pacte_id
+        JOIN users u ON part.discord_id = u.discord_id
+        WHERE p.status IN ('pending', 'active')
+            AND part.left_at IS NULL 
+            AND part.kicked_at IS NULL;
     `);
 
     // Triggers pour mettre à jour automatiquement les timestamps
