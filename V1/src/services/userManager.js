@@ -174,7 +174,6 @@ async function signPacte(pacteId, discordId) {
 async function getPendingPactes(channelId) {
     const db = getDb();
     
-    // Récupérer tous les pactes en attente dans ce canal
     const pactes = await db.all(
         `SELECT 
             p.id, 
@@ -186,21 +185,25 @@ async function getPendingPactes(channelId) {
          FROM pactes p
          JOIN participants part ON p.id = part.pacte_id
          WHERE p.log_channel_id = ? 
-           AND p.status = 'pending'
+           AND p.status IN ('pending', 'active')  -- Inclure les deux statuts
            AND part.left_at IS NULL
+           AND part.kicked_at IS NULL
+           AND (
+               p.status = 'pending' OR 
+               (p.status = 'active' AND p.current_wins = 0)  -- Pacte actif mais pas encore commencé
+           )
            AND datetime(p.created_at, '+5 minutes') > datetime('now')
          GROUP BY p.id`,
         channelId
     );
     
-    // Transformer en format utilisable
     return pactes.map(pacte => ({
         id: pacte.id,
         objective: pacte.objective,
         status: pacte.status,
         created_at: pacte.created_at,
         participants: pacte.participants ? pacte.participants.split(',') : [],
-        signed_participants: pacte.signed_participants ? pacte.signed_participants.split(',') : []
+        signed_participants: pacte.signed_participants ? pacte.signed_participants.split(',').filter(Boolean) : []
     }));
 }
 
@@ -531,11 +534,11 @@ module.exports = {
     getPacteParticipants,
     leavePacte,
     getJoinablePacte,
-    getAllJoinablePactes,
-    joinPacte,
-    updateBestStreak,
-    resetMonthlyPoints,
+    resetMonthlyPoints,s,
     cleanupExpiredPactes,
+    kickParticipant,,
+    isParticipantoints,
+};  cleanupExpiredPactes,
     kickParticipant,
     isParticipant
 };
