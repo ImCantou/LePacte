@@ -46,6 +46,7 @@ async function init() {
         await initDatabase();
         await client.login(process.env.DISCORD_TOKEN);
         startPolling(client);
+        await initScheduledTasks(client);
         logger.info('Bot started successfully');
     } catch (error) {
         logger.error('Failed to start bot:', error);

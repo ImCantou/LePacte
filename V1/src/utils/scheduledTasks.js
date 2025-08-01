@@ -1,7 +1,6 @@
 const { getDb } = require('./database');
 const { resetMonthlyPoints, completePacte, cleanupExpiredPactes } = require('../services/userManager');
 const { calculatePoints, calculateMalus } = require('../services/pointsCalculator');
-const { sendTimeWarningTaunt } = require('../services/pacteManager');
 const { cleanupOldMatchHistory } = require('../services/gameHistoryService');
 const logger = require('./logger');
 
@@ -61,9 +60,6 @@ async function sendWarnings(client) {
             await channel.send({
                 content: `⏰ **ATTENTION** ${participantMentions}\nPlus qu'1 heure pour compléter le pacte #${pacte.id} !\nObjectif: ${pacte.objective} wins | Actuel: ${pacte.current_wins}`
             });
-            
-            // Envoyer un taunt de temps qui s'écoule
-            await sendTimeWarningTaunt(pacte, channel, 1);
         }
         
         // Marquer comme averti
