@@ -138,7 +138,6 @@ async function getMatchHistory(puuid, count = 5, queueId = 450) {
         
         const matchIds = response.data;
         logger.debug(`Found ${matchIds.length} recent ARAM matches for PUUID ${puuid.substring(0, 8)}...`);
-        
         return matchIds;
         
     } catch (error) {
