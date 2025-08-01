@@ -6,6 +6,7 @@ const {
     getActivePactes, 
     updatePacteStatus, 
     completePacte,
+    getPacteParticipants,
     updateBestStreak 
 } = require('./userManager');
 const { calculatePoints, calculateMalus } = require('./pointsCalculator');
