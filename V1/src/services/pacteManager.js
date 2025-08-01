@@ -6,7 +6,6 @@ const {
     getActivePactes, 
     updatePacteStatus, 
     completePacte,
-    getPacteParticipants,
     updateBestStreak 
 } = require('./userManager');
 const { calculatePoints, calculateMalus } = require('./pointsCalculator');
@@ -390,14 +389,6 @@ async function handlePacteTimeout(pacte, participants, client) {
             `*L'Abîme se souviendra de votre tentative...*`
         );
     }
-}
-
-async function completePacte(pacteId, success, points) {
-    await completeInDb(pacteId, success, points);
-}
-
-async function getPacteParticipants(pacteId) {
-    return await getFromDb(pacteId);
 }
 
 async function sendRandomTaunt(pacte, channel, currentWins) {
