@@ -7,7 +7,6 @@ module.exports = {
         logger.info(`Bot logged in as ${client.user.tag}`);
         const { ActivityType } = require('discord.js');
             
-        client.user.setActivity('les pactes ARAM', { type: ActivityType.Watching });        
-        // pendingPactes est déjà initialisé dans bot.js, pas besoin de le réinitialiser
+        client.user.setActivity('les pactes ARAM', { type: ActivityType.Watching });
     }
 };

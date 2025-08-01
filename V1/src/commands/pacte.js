@@ -35,16 +35,7 @@ module.exports = {
         .addSubcommand(subcommand =>
             subcommand
                 .setName('join')
-                .setDescription('Rejoindre un pacte existant (si 0 victoire)'))
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('kick')
-                .setDescription('Voter pour exclure un participant du pacte')
-                .addUserOption(option =>
-                    option
-                        .setName('joueur')
-                        .setDescription('Le joueur à exclure')
-                        .setRequired(true))),
+                .setDescription('Rejoindre un pacte existant (si 0 victoire)')),
 
     async execute(interaction) {
         const subcommand = interaction.options.getSubcommand();
@@ -61,9 +52,6 @@ module.exports = {
                 break;
             case 'join':
                 await handleJoinPacte(interaction);
-                break;
-            case 'kick':
-                await handleKickPacte(interaction);
                 break;
         }
     }
@@ -323,88 +311,6 @@ async function handleJoinPacte(interaction) {
             content: '🎯 Plusieurs pactes disponibles :',
             components: [row],
             ephemeral: true
-        });
-    }
-}
-
-async function handleKickPacte(interaction) {
-    const targetUser = interaction.options.getUser('joueur');
-    
-    // Vérifications de base
-    const activePacte = await getActiveUserPacte(interaction.user.id);
-    if (!activePacte) {
-        return interaction.reply({
-            content: '❌ Vous n\'avez pas de pacte actif.',
-            ephemeral: true
-        });
-    }
-    
-    // Vérifier que la cible est dans le pacte
-    const targetInPacte = await getUserByDiscordId(targetUser.id);
-    const targetPacte = await getActiveUserPacte(targetUser.id);
-    
-    if (!targetInPacte || !targetPacte || targetPacte.id !== activePacte.id) {
-        return interaction.reply({
-            content: '❌ Ce joueur n\'est pas dans votre pacte.',
-            ephemeral: true
-        });
-    }
-    
-    if (targetUser.id === interaction.user.id) {
-        return interaction.reply({
-            content: '❌ Utilisez `/pacte leave` pour quitter.',
-            ephemeral: true
-        });
-    }
-    
-    // Simple kick direct (pas de vote complexe)
-    const malus = calculateMalus(activePacte.objective, activePacte.best_streak_reached);
-    
-    const confirmEmbed = new EmbedBuilder()
-        .setColor(0xFF0000)
-        .setTitle('👢 Exclure un joueur')
-        .setDescription(`Exclure **${targetUser.username}** du pacte ?`)
-        .addFields(
-            { name: 'Malus pour le joueur', value: `-${malus} points`, inline: true }
-        );
-    
-    await interaction.reply({
-        embeds: [confirmEmbed],
-        content: 'Réagissez avec ✅ pour confirmer (30 secondes)',
-        fetchReply: true
-    });
-    
-    const message = await interaction.fetchReply();
-    await message.react('✅');
-    
-    const filter = (reaction, user) => reaction.emoji.name === '✅' && user.id === interaction.user.id;
-    
-    try {
-        await message.awaitReactions({ filter, max: 1, time: 30000, errors: ['time'] });
-        
-        // Effectuer le kick
-        const { kickParticipant } = require('../services/userManager');
-        await kickParticipant(activePacte.id, targetUser.id, malus, `Exclu par ${interaction.user.username}`);
-        
-        await interaction.editReply({
-            content: `✅ ${targetUser.username} a été exclu du pacte. Malus : -${malus} points`,
-            embeds: []
-        });
-        
-        // Log
-        const logChannel = interaction.guild.channels.cache.get(process.env.LOG_CHANNEL_ID);
-        if (logChannel) {
-            await logChannel.send(
-                `👢 **EXCLUSION** - Pacte #${activePacte.id}\n` +
-                `${targetUser} exclu par ${interaction.user}\n` +
-                `Malus : -${malus} points`
-            );
-        }
-        
-    } catch (error) {
-        await interaction.editReply({
-            content: '⏰ Temps écoulé. Exclusion annulée.',
-            embeds: []
         });
     }
 }

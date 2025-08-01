@@ -17,7 +17,6 @@ const client = new Client({
 });
 
 client.commands = new Collection();
-client.pendingPactes = new Map();
 
 // Load commands
 const commandsPath = path.join(__dirname, 'commands');
