@@ -534,11 +534,8 @@ module.exports = {
     getPacteParticipants,
     leavePacte,
     getJoinablePacte,
-    resetMonthlyPoints,s,
+    resetMonthlyPoints,
     cleanupExpiredPactes,
-    kickParticipant,,
-    isParticipantoints,
-};  cleanupExpiredPactes,
     kickParticipant,
     isParticipant
 };
