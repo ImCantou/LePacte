@@ -2,6 +2,7 @@ const { SlashCommandBuilder, EmbedBuilder, StringSelectMenuBuilder, StringSelect
 const { createPacte, getUserByDiscordId, getActiveUserPacte, getPacteParticipants } = require('../services/userManager');
 const { PACTE_RULES } = require('../utils/constants');
 const { calculatePoints, calculateMalus } = require('../services/pointsCalculator');
+const { getDb } = require('../utils/database'); // Ajouter cet import
 const logger = require('../utils/logger');
 
 module.exports = {
@@ -160,17 +161,55 @@ async function handleStatusPacte(interaction) {
         });
     }
     
+    // Calculer le temps écoulé et les parties jouées
+    const startTime = new Date(activePacte.started_at || activePacte.created_at);
+    const hoursElapsed = Math.floor((Date.now() - startTime) / 3600000);
+    const minutesElapsed = Math.floor(((Date.now() - startTime) % 3600000) / 60000);
+    const hoursLeft = Math.max(0, 24 - hoursElapsed);
+    const minutesLeft = hoursLeft === 24 - hoursElapsed ? 60 - minutesElapsed : 0;
+    
+    // Récupérer le nombre de parties jouées
+    const db = getDb();
+    const gamesPlayed = await db.get(
+        'SELECT COUNT(*) as count FROM game_history WHERE pacte_id = ?',
+        activePacte.id
+    );
+    
     const embed = new EmbedBuilder()
-        .setColor(0x0099ff)
+        .setColor(activePacte.current_wins > 0 ? 0x00ff00 : 0x0099ff)
         .setTitle(`📜 Pacte #${activePacte.id}`)
         .addFields(
             { name: '🎯 Objectif', value: `${activePacte.objective} victoires`, inline: true },
             { name: '🏆 Victoires actuelles', value: `${activePacte.current_wins}`, inline: true },
             { name: '🔥 Meilleure série', value: `${activePacte.best_streak_reached}`, inline: true },
-            { name: '📊 Statut', value: activePacte.status === 'active' ? '✅ Actif' : '⏳ En attente', inline: true }
-        )
-        .setTimestamp(new Date(activePacte.created_at))
-        .setFooter({ text: 'Pacte ARAM Bot' });
+            { name: '📊 Statut', value: activePacte.status === 'active' ? '✅ Actif' : '⏳ En attente', inline: true },
+            { name: '🎮 Parties jouées', value: `${gamesPlayed?.count || 0}`, inline: true },
+            { name: '⏰ Temps restant', value: hoursLeft > 0 ? `${hoursLeft}h ${minutesLeft}min` : '⚠️ Expiré', inline: true }
+        );
+    
+    // Ajouter le temps écoulé
+    if (hoursElapsed > 0 || minutesElapsed > 0) {
+        embed.addFields({
+            name: '⏱️ Temps écoulé',
+            value: `${hoursElapsed}h ${minutesElapsed}min`,
+            inline: false
+        });
+    }
+    
+    // Ajouter un message contextuel
+    if (hoursLeft === 0) {
+        embed.setDescription('⚠️ **TEMPS ÉCOULÉ !** Ce pacte va bientôt être archivé.');
+        embed.setColor(0xff0000);
+    } else if (activePacte.current_wins === activePacte.objective - 1) {
+        embed.setDescription('🔥 **MATCH POINT !** Une victoire de plus pour la gloire !');
+        embed.setColor(0xffa500);
+    } else if (activePacte.current_wins > 0) {
+        embed.setDescription(`💪 En bonne voie ! Plus que ${activePacte.objective - activePacte.current_wins} victoires !`);
+    } else if (gamesPlayed?.count > 0) {
+        embed.setDescription('💀 Retour à zéro... Mais il n\'est jamais trop tard pour recommencer !');
+    } else {
+        embed.setDescription('🤔 En attente de la première victoire...');
+    }
     
     await interaction.reply({ embeds: [embed] });
 }

@@ -88,20 +88,22 @@ async function checkPacteProgress(pacte, client) {
                     current_game_id: currentGame
                 });
                 
-                // Notification
-                const logChannel = client.channels.cache.get(process.env.LOG_CHANNEL_ID);
-                if (logChannel) {
-                    await logChannel.send(
-                        `🎮 **Partie détectée** - Pacte #${pacte.id} (${pacte.current_wins}/${pacte.objective})`
-                    );
-                }
-                
+                // Une seule notification dans le canal principal
                 const channel = client.channels.cache.get(pacte.log_channel_id);
                 if (channel) {
                     const mentions = participants.map(p => `<@${p.discord_id}>`).join(' ');
                     await channel.send(
-                        `🎮 **GO !** ${mentions} - Bonne chance dans l'Abîme ! (${pacte.current_wins}/${pacte.objective}) 🎯`
+                        `🎮 **PARTIE DÉTECTÉE !**\n` +
+                        `${mentions}\n` +
+                        `Pacte #${pacte.id} - ${pacte.current_wins}/${pacte.objective}\n` +
+                        `Bonne chance dans l'Abîme ! 🎯`
                     );
+                }
+                
+                // Log discret dans le canal de logs
+                const logChannel = client.channels.cache.get(process.env.LOG_CHANNEL_ID);
+                if (logChannel) {
+                    await logChannel.send(`🎮 Partie lancée - Pacte #${pacte.id}`);
                 }
             }
             return; // Attendre la fin de la game
@@ -117,15 +119,12 @@ async function checkPacteProgress(pacte, client) {
                 current_game_id: null
             });
             
-            // Attendre un peu que l'API se mette à jour (3 cycles de polling = 30 secondes)
-            if (!pacte.fetch_attempts) {
-                await updatePacteStatus(pacte.id, { fetch_attempts: 1 });
-                return;
-            }
+            // Initialiser fetch_attempts si nécessaire
+            const currentAttempts = pacte.fetch_attempts || 0;
             
-            if (pacte.fetch_attempts < 18) { // Essayer pendant 3 minutes
+            if (currentAttempts < 18) { // Essayer pendant 3 minutes
                 await updatePacteStatus(pacte.id, { 
-                    fetch_attempts: pacte.fetch_attempts + 1 
+                    fetch_attempts: currentAttempts + 1 
                 });
                 
                 // Essayer de récupérer le résultat
@@ -146,7 +145,7 @@ async function checkPacteProgress(pacte, client) {
                         await updatePacteStatus(pacte.id, { fetch_attempts: 0 });
                     }
                 } else {
-                    logger.debug(`No result yet for pacte #${pacte.id}, attempt ${pacte.fetch_attempts}/18`);
+                    logger.debug(`No result yet for pacte #${pacte.id}, attempt ${currentAttempts + 1}/18`);
                 }
             } else {
                 // Après 3 minutes, abandonner
@@ -215,17 +214,6 @@ async function processGameResult(pacte, gameResult, participants, client) {
     // Enregistrer le match comme traité
     await recordProcessedMatch(gameResult.matchId, pacte.id, gameResult.win ? 'win' : 'loss');
     
-    // Log détaillé
-    if (logChannel) {
-        const resultEmoji = gameResult.win ? '✅' : '❌';
-        await logChannel.send(
-            `${resultEmoji} **Résultat détecté** - Pacte #${pacte.id}\n` +
-            `Match ID: \`${gameResult.matchId}\`\n` +
-            `Durée: ${Math.floor(gameResult.gameDuration / 60)}min\n` +
-            `Progression: ${pacte.current_wins} → ${gameResult.win ? pacte.current_wins + 1 : 0}/${pacte.objective}`
-        );
-    }
-    
     // Calculer la durée de la partie
     const gameDurationMin = Math.floor(gameResult.gameDuration / 60);
     
@@ -258,6 +246,14 @@ async function processGameResult(pacte, gameResult, participants, client) {
                     `*Vos noms seront gravés dans les annales de l'Abîme Hurlant !*`
                 );
             }
+            
+            // Log simplifié
+            if (logChannel) {
+                await logChannel.send(
+                    `✅ **PACTE RÉUSSI** - #${pacte.id}\n` +
+                    `${pacte.objective} victoires atteintes ! +${points} points`
+                );
+            }
         } else {
             // Continuer le pacte
             await updatePacteStatus(pacte.id, { 
@@ -276,6 +272,14 @@ async function processGameResult(pacte, gameResult, participants, client) {
                 
                 // Taunt automatique
                 await sendRandomTaunt(pacte, channel, newWins);
+            }
+            
+            // Log dans le canal de logs
+            if (logChannel) {
+                await logChannel.send(
+                    `✅ **Victoire** - Pacte #${pacte.id}\n` +
+                    `Progression: ${pacte.current_wins} → ${newWins}/${pacte.objective} (${gameDurationMin}min)`
+                );
             }
         }
     } else {
